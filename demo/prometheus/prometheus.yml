@@ -1,0 +1,21 @@
+# Demo Prometheus. Scrapes the built-in exporter each HAProxy node serves on
+# its stats port - no exporter sidecar is involved (HAProxy 2.0+).
+#
+# In production you almost certainly already run Prometheus; point HAProxyOps
+# at it with HAPROXYOPS_PROMETHEUS_URL instead of running this one.
+global:
+  scrape_interval: 10s
+  evaluation_interval: 30s
+
+scrape_configs:
+  - job_name: haproxy
+    metrics_path: /metrics
+    static_configs:
+      - targets: [haproxy-demo:8404]
+        labels: {node: lb-edge-1}
+      - targets: [haproxy-demo-2:8404]
+        labels: {node: lb-edge-2}
+      - targets: [haproxy-demo-3:8404]
+        labels: {node: lb-internal-1}
+      - targets: [haproxy-demo-4:8404]
+        labels: {node: lb-internal-2}

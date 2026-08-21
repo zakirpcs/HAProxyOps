@@ -1,0 +1,39 @@
+@import "tailwindcss";
+
+@theme {
+  --color-ink-950: #0b0e14;
+  --color-ink-900: #11151d;
+  --color-ink-800: #171c26;
+  --color-ink-700: #232a37;
+  --color-ink-600: #333c4d;
+  --color-mute: #8b95a7;
+  --color-up: #2fbf71;
+  --color-down: #e5484d;
+  --color-drain: #f5a524;
+  --color-accent: #4d8dff;
+  --font-mono: ui-monospace, "JetBrains Mono", "SFMono-Regular", Menlo, monospace;
+
+  /* Chart series. Dark-mode steps of the validated categorical palette,
+     re-checked against this app's chart surface (--color-ink-900 #11151d):
+     lightness band, chroma floor, CVD separation, normal-vision floor and
+     3:1 contrast all pass for all six slots. Assign in fixed order and never
+     generate a seventh - the tail is dropped server-side by topk() instead. */
+  --color-series-1: #3987e5;
+  --color-series-2: #d95926;
+  --color-series-3: #199e70;
+  --color-series-4: #c98500;
+  --color-series-5: #d55181;
+  --color-series-6: #008300;
+
+  /* Chart chrome, deliberately recessive. */
+  --color-chart-grid: #232a37;
+  --color-chart-axis: #333c4d;
+}
+
+html, body, #root { height: 100%; }
+body {
+  background: var(--color-ink-950);
+  color: #e6e9ef;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-variant-numeric: tabular-nums;
+}

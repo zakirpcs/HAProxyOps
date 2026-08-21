@@ -1,0 +1,14 @@
+FROM docker.io/library/node:22-alpine AS build
+WORKDIR /src
+COPY package.json package-lock.json* ./
+RUN npm ci || npm install
+COPY . .
+RUN npm run build
+
+FROM registry.access.redhat.com/ubi9/nginx-124:latest
+COPY --from=build /src/dist /opt/app-root/src
+# The UBI nginx image ignores /etc/nginx/conf.d; nginx.default.d is
+# included inside its default server block.
+COPY nginx.conf /opt/app-root/etc/nginx.default.d/haproxyops.conf
+EXPOSE 8080
+CMD ["nginx", "-g", "daemon off;"]

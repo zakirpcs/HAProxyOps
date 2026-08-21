@@ -1,0 +1,60 @@
+# /etc/haproxy/dataplaneapi.yml
+#
+# Install on each managed node:
+#   dnf install haproxy haproxy-dataplaneapi
+#   systemctl enable --now haproxy dataplaneapi
+#
+# If your distro ships dataplaneapi only as a standalone binary, drop it in
+# /usr/local/bin and use the systemd unit alongside this file.
+
+config_version: 2
+
+name: lb1.dc1.example.com
+
+dataplaneapi:
+  host: 10.0.0.11          # management interface only
+  port: 5555
+
+  # Keep the TLS block below populated. dataplaneapi enables both the http and
+  # https listeners by default; if https is enabled without a certificate it
+  # binds a port and then exits(1) silently, logging nothing at any log level.
+  # Either configure TLS (as here) or pin --scheme=http explicitly.
+  tls:
+    tls_host: 10.0.0.11
+    tls_port: 5556
+    tls_certificate: /etc/haproxy/certs/dataplane.crt
+    tls_private_key: /etc/haproxy/certs/dataplane.key
+    # mTLS: require the dashboard to present a client certificate.
+    # This is the recommended posture - basic auth alone leaves a
+    # config-mutating API reachable to anything that can route to the port.
+    tls_ca_certificate: /etc/haproxy/certs/dashboard-ca.crt
+
+  user:
+    # Generate the hash with:  mkpasswd -m sha-512   (or openssl passwd -6)
+    - name: haproxyops
+      insecure: false
+      password: "$6$REPLACE_WITH_A_REAL_HASH"
+
+  transaction:
+    transaction_dir: /var/lib/haproxy/dataplane-transactions
+
+  resources:
+    maps_dir: /etc/haproxy/maps
+    ssl_certs_dir: /etc/haproxy/ssl
+    spoe_dir: /etc/haproxy/spoe
+
+haproxy:
+  config_file: /etc/haproxy/haproxy.cfg
+  haproxy_bin: /usr/sbin/haproxy
+
+  reload:
+    reload_delay: 5
+    reload_cmd: systemctl reload haproxy
+    restart_cmd: systemctl restart haproxy
+    status_cmd: systemctl status haproxy
+    reload_strategy: custom
+
+log_targets:
+  - log_to: syslog
+    syslog_facility: local0
+    log_level: info

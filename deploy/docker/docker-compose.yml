@@ -1,0 +1,113 @@
+# Production stack for a single Docker host (RHEL family).
+#
+# This is not the docker-compose.yml at the repo root: that one builds from
+# source, exposes everything, and ships a demo HAProxy fleet. This one runs
+# prebuilt images, publishes only to loopback behind the host's nginx, and
+# takes its secrets from files rather than environment variables.
+#
+# Installed to /etc/haproxyops/docker-compose.yml by deploy/docker/install.sh.
+name: haproxyops
+
+x-hardening: &hardening
+  security_opt: ["no-new-privileges:true"]
+  restart: always
+
+services:
+  db:
+    <<: *hardening
+    image: docker.io/library/postgres:16-alpine
+    container_name: haproxyops-db
+    networks: [haproxyops]
+    environment:
+      POSTGRES_DB: haproxyops
+      POSTGRES_USER: haproxyops
+      # The postgres image reads the password from this file, so it never
+      # appears in the container environment.
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+    secrets: [db_password]
+    volumes:
+      - pgdata:/var/lib/postgresql/data:Z
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U haproxyops"]
+      interval: 10s
+      retries: 5
+
+  redis:
+    <<: *hardening
+    image: docker.io/library/redis:7-alpine
+    container_name: haproxyops-redis
+    networks: [haproxyops]
+    volumes:
+      - redisdata:/data:Z
+    cap_drop: [ALL]
+    # The entrypoint starts as root and setpriv's down to the redis user, which
+    # needs these two back. Dropping ALL outright makes redis crash-loop with
+    # "setpriv: setresuid failed: Operation not permitted".
+    cap_add: [SETUID, SETGID]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      retries: 5
+
+  api:
+    <<: *hardening
+    image: haproxyops-api:latest
+    # The web container's nginx proxies to http://haproxyops-api:8000, so this
+    # name is load-bearing, not cosmetic.
+    container_name: haproxyops-api
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_started}
+    networks: [haproxyops]
+    # Loopback only. The host's nginx is the sole TLS edge; nothing in this
+    # stack is reachable from off-box directly.
+    ports: ["127.0.0.1:8000:8000"]
+    environment:
+      HAPROXYOPS_REDIS_URL: redis://haproxyops-redis:6379/0
+      HAPROXYOPS_CORS_ORIGINS: "[]"
+      HAPROXYOPS_POLL_INTERVAL_SECONDS: "10"
+    # Mounted at /run/secrets/<name> and read by pydantic-settings' secrets_dir.
+    # The names must match the HAPROXYOPS_ variables exactly.
+    secrets:
+      - HAPROXYOPS_SECRET_KEY
+      - HAPROXYOPS_DATABASE_URL
+      - HAPROXYOPS_INITIAL_ADMIN_PASSWORD
+    volumes:
+      # Client certificates for mTLS to the managed nodes.
+      - /etc/haproxyops/certs:/etc/haproxyops/certs:ro,Z
+    read_only: true
+    tmpfs: ["/tmp"]
+    cap_drop: [ALL]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health').status==200 else 1)"]
+      interval: 30s
+      start_period: 15s
+      retries: 3
+
+  web:
+    <<: *hardening
+    image: haproxyops-web:latest
+    container_name: haproxyops-web
+    depends_on: [api]
+    networks: [haproxyops]
+    ports: ["127.0.0.1:8080:8080"]
+
+networks:
+  haproxyops:
+    name: haproxyops
+
+volumes:
+  pgdata:
+  redisdata:
+
+# Root-owned, 0600, created by install.sh. Compose reads them at start and
+# mounts them into the containers that ask for them - nowhere else.
+secrets:
+  db_password:
+    file: /etc/haproxyops/secrets/db_password
+  HAPROXYOPS_SECRET_KEY:
+    file: /etc/haproxyops/secrets/secret_key
+  HAPROXYOPS_DATABASE_URL:
+    file: /etc/haproxyops/secrets/database_url
+  HAPROXYOPS_INITIAL_ADMIN_PASSWORD:
+    file: /etc/haproxyops/secrets/admin_password

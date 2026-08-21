@@ -1,0 +1,22 @@
+# /etc/systemd/system/haproxyops.service
+#
+# Docker has no systemd generator, so one oneshot unit owns the whole
+# compose project.
+[Unit]
+Description=HAProxyOps dashboard
+Requires=docker.service
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/etc/haproxyops
+ExecStart=/usr/bin/docker compose up -d --remove-orphans
+ExecStop=/usr/bin/docker compose down
+# `up -d` reconciles against the compose file, so reload is the same command.
+ExecReload=/usr/bin/docker compose up -d --remove-orphans
+# Image pulls on a cold host can take a while; let them finish.
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target

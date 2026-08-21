@@ -1,0 +1,23 @@
+__pycache__/
+*.py[cod]
+.venv/
+*.db
+.env
+node_modules/
+dist/
+.DS_Store
+
+# Build and tooling artefacts
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+coverage/
+*.log
+
+# Never commit real secrets. deploy/docker/install.sh generates these into
+# /etc/haproxyops/secrets on the host; nothing secret belongs in the repo.
+secrets/
+*.pem
+*.key
+*.crt

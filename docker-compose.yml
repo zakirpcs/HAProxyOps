@@ -1,0 +1,114 @@
+# Local development / demo stack.
+#
+# Production on RHEL uses deploy/docker/ instead - prebuilt images, secrets
+# as files, loopback-only ports behind nginx.
+# Bring it up with:  docker compose up -d --build
+# Then open http://localhost:8080
+
+services:
+  redis:
+    image: docker.io/library/redis:7-alpine
+    ports: ["6379:6379"]
+
+  db:
+    image: docker.io/library/postgres:16-alpine
+    environment:
+      POSTGRES_DB: haproxyops
+      POSTGRES_USER: haproxyops
+      POSTGRES_PASSWORD: devpassword
+    # Without this the database lives in the container's writable layer, and
+    # every registered node is destroyed by an ordinary `compose down`.
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U haproxyops"]
+      interval: 5s
+      retries: 10
+
+  api:
+    # The build file is named Containerfile, which Docker does not auto-detect.
+    build:
+      context: ./backend
+      dockerfile: Containerfile
+    # nginx in the web container proxies to this name; keep it aligned with
+    # deploy/docker/docker-compose.yml so one nginx.conf serves dev and prod.
+    container_name: haproxyops-api
+    depends_on:
+      redis: {condition: service_started}
+      db: {condition: service_healthy}
+    environment:
+      HAPROXYOPS_SECRET_KEY: dev-secret-not-for-production
+      HAPROXYOPS_REDIS_URL: redis://redis:6379/0
+      HAPROXYOPS_DATABASE_URL: postgresql+asyncpg://haproxyops:devpassword@db:5432/haproxyops
+      HAPROXYOPS_CORS_ORIGINS: '["http://localhost:5173"]'
+      HAPROXYOPS_POLL_INTERVAL_SECONDS: "5"
+      HAPROXYOPS_PROMETHEUS_URL: http://prometheus:9090
+      HAPROXYOPS_INITIAL_ADMIN_PASSWORD: haproxyops
+    ports: ["8000:8000"]
+
+  web:
+    build:
+      context: ./frontend
+      dockerfile: Containerfile
+    depends_on: [api]
+    ports: ["8080:8080"]
+
+  # --- demo HAProxy node, so the dashboard has something to show ------------
+
+  # Demo node: HAProxy running the Data Plane API alongside it, so the
+  # dashboard gets full runtime actions against it.
+  haproxy-demo:
+    image: docker.io/haproxytech/haproxy-alpine:3.0
+    volumes:
+      - ./demo/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+      - ./demo/dataplaneapi-start.sh:/usr/local/bin/dataplaneapi-start.sh:ro
+    ports:
+      - "8404:8404"   # stats page
+      - "5555:5555"   # Data Plane API
+      - "8081:8081"   # proxied app
+    depends_on: [web1, web2]
+
+  # Demo Prometheus, scraping each node's built-in exporter. Point the API at
+  # your existing Prometheus in production rather than running this one.
+  prometheus:
+    image: docker.io/prom/prometheus:v2.55.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=6h
+      - --web.enable-lifecycle
+    volumes:
+      - ./demo/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports: ["9090:9090"]
+
+  # Extra demo nodes so the fleet table has enough rows to be worth sorting.
+  # Not port-published: the dashboard reaches them by service name.
+  haproxy-demo-2:
+    image: docker.io/haproxytech/haproxy-alpine:3.0
+    volumes:
+      - ./demo/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+      - ./demo/dataplaneapi-start.sh:/usr/local/bin/dataplaneapi-start.sh:ro
+    depends_on: [web1, web2]
+
+  haproxy-demo-3:
+    image: docker.io/haproxytech/haproxy-alpine:3.0
+    volumes:
+      - ./demo/haproxy-b.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+      - ./demo/dataplaneapi-start.sh:/usr/local/bin/dataplaneapi-start.sh:ro
+    depends_on: [web1, web2]
+
+  haproxy-demo-4:
+    image: docker.io/haproxytech/haproxy-alpine:3.0
+    volumes:
+      - ./demo/haproxy-b.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+      - ./demo/dataplaneapi-start.sh:/usr/local/bin/dataplaneapi-start.sh:ro
+    depends_on: [web1, web2]
+
+  web1:
+    image: docker.io/traefik/whoami:latest
+  web2:
+    image: docker.io/traefik/whoami:latest
+  # There is no web3 container: the demo config points that server at a dead
+  # local port so the dashboard has a realistic DOWN backup server to render.
+
+volumes:
+  pgdata:

@@ -1,0 +1,20 @@
+FROM registry.access.redhat.com/ubi9/python-311:latest
+
+USER 0
+WORKDIR /app
+
+COPY pyproject.toml ./
+RUN pip install --no-cache-dir . && \
+    # UBI images ship a numeric-uid default user; keep the app non-root.
+    chown -R 1001:0 /app && chmod -R g=u /app
+
+COPY app ./app
+
+USER 1001
+EXPOSE 8000
+
+# The poller runs inside the app's lifespan, so a single worker owns exactly
+# one poll loop. Scaling out means running a separate poller process - see
+# the "Scaling" section of the README before raising this.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", \
+     "--proxy-headers", "--forwarded-allow-ips", "*"]
