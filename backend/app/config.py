@@ -40,6 +40,16 @@ class Settings(BaseSettings):
     prometheus_url: str = ""
     prometheus_timeout_seconds: float = 10.0
 
+    # Alerting. Without a webhook URL the whole subsystem is inert - no state
+    # is kept and no evaluation runs, so it costs nothing until configured.
+    alert_webhook_url: str = ""
+    #: How long a problem must persist before it is announced. Short enough to
+    #: be useful, long enough that a restarting node is not an incident.
+    alert_for_seconds: float = 60.0
+    #: How long a firing alert waits before repeating. 0 disables repeats.
+    alert_repeat_seconds: float = 3600.0
+    alert_timeout_seconds: float = 10.0
+
     # Polling
     poll_interval_seconds: float = 10.0
     poll_timeout_seconds: float = 5.0

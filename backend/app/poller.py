@@ -8,13 +8,14 @@ from datetime import UTC, datetime
 
 from sqlalchemy import select
 
+from . import alerting
 from .config import get_settings
 from .db import SessionLocal
 from .drivers import build_driver
 from .drivers.base import DriverError, NodeSnapshot
 from .models import Node
 from .security import decrypt_secret
-from .state import store_snapshot
+from .state import snapshot_to_dict, store_snapshot
 
 log = logging.getLogger("haproxyops.poller")
 settings = get_settings()
@@ -60,6 +61,14 @@ async def poll_once() -> int:
     unreachable = [s.node_name for s in snapshots if not s.reachable]
     if unreachable:
         log.warning("unreachable nodes: %s", ", ".join(unreachable))
+
+    # After storing, so the dashboard is never waiting on a webhook, and
+    # guarded so a broken receiver cannot stop the fleet being polled.
+    try:
+        await alerting.run([snapshot_to_dict(s) for s in snapshots])
+    except Exception:
+        log.exception("alert evaluation failed")
+
     return len(snapshots)
 
 

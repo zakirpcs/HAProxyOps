@@ -690,6 +690,61 @@ every node.
 
 ---
 
+## Alerting
+
+The status indicator only helps while somebody is looking at the screen. This
+covers the other twenty-three hours. Off unless a webhook is configured — with
+none set, nothing is evaluated and no state is kept:
+
+```bash
+HAPROXYOPS_ALERT_WEBHOOK_URL=https://hooks.example.com/haproxyops
+HAPROXYOPS_ALERT_FOR_SECONDS=60        # how long a problem must last
+HAPROXYOPS_ALERT_REPEAT_SECONDS=3600   # 0 disables repeats
+```
+
+### What fires
+
+| Condition | Severity |
+| --- | --- |
+| A node is unreachable | critical |
+| A backend has no active server up | critical |
+| A backend has lost some but not all active servers | warning |
+
+A **disabled node is silent** — polling is off deliberately, and alerting on it
+would punish an operator for having said so. An **unreachable node reports only
+itself**: its backends cannot be judged from a snapshot that failed, and
+inventing outages from missing data turns one problem into a dozen. A **down
+backup is never an alert**, for the same reason it does not make a node
+[degraded](#node-state-and-what-counts-as-degraded).
+
+### Not crying wolf
+
+The hard part is not detecting a problem; it is staying worth reading.
+
+- **Alerts fire on a transition, not on a state.** A backend down for an hour is
+  one message, not one per poll cycle.
+- **A problem must persist** for `ALERT_FOR_SECONDS` before it is announced. A
+  node restarting trips every rule here for a few seconds and resolves itself.
+- **A flap that never fired never resolves.** Something that cleared before the
+  delay was never anyone's business, and a resolution for an alert nobody saw
+  is pure noise.
+- **Recovery is announced**, carrying the key that fired so a receiver can close
+  its own incident. An alert that never resolves teaches people to ignore the
+  channel.
+- **State lives in Redis**, so a redeploy does not re-announce every problem the
+  fleet already has.
+
+### Delivery
+
+One JSON POST per alert: `status` (firing/resolved), `severity`, `title`,
+`detail`, `node`, `key`, `labels`, `source`, `at`. Flat and generic on purpose —
+readable by a human through a Slack or Discord incoming webhook, parsable by
+anything else, without pretending to be Alertmanager's schema.
+
+Delivery never raises. A webhook being down is worth a log line, not an outage
+of the tool people use to see the outage — evaluation runs after snapshots are
+stored, so the dashboard never waits on a receiver.
+
 ## Metrics and history
 
 HAProxyOps stores **no time series of its own** — it owns control and current
