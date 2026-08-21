@@ -37,7 +37,8 @@ describe("Alerts page", () => {
 
     expect(await screen.findByText(/has no active servers/)).toBeInTheDocument();
     expect(screen.getByText(/All 2 active servers are down/)).toBeInTheDocument();
-    expect(screen.getByText(/^for /)).toBeInTheDocument();
+    // Duration has its own column; 300s renders as "5m 0s".
+    expect(screen.getByText("5m 0s")).toBeInTheDocument();
     expect(screen.getByText("sent")).toBeInTheDocument();
   });
 
@@ -68,8 +69,17 @@ describe("Alerts page", () => {
   it("links to the node the alert is about", async () => {
     installApi({ alerts: [alert()], count: 1 });
     renderWithProviders(<Alerts />, { route: "/alerts" });
-    expect(await screen.findByRole("link", { name: /Open lb-1/ }))
+    // The node column is the link; a separate "open" line would cost a row.
+    expect(await screen.findByRole("link", { name: "lb-1" }))
       .toHaveAttribute("href", "/nodes/1");
+  });
+
+  it("does not repeat the node name inside the alert text", async () => {
+    // The node has its own column, so "lb-1/app has no active servers" would
+    // print lb-1 twice on one line.
+    installApi({ alerts: [alert()], count: 1 });
+    renderWithProviders(<Alerts />, { route: "/alerts" });
+    expect(await screen.findByText("app has no active servers")).toBeInTheDocument();
   });
 
   it("puts critical alerts above warnings", async () => {

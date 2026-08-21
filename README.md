@@ -717,6 +717,11 @@ old enough to have been announced — a real state, not a rounding of "firing",
 and calling it sent would be a lie. Critical sorts above warning, then longest
 running first.
 
+One row per alert rather than a stack of cards: a fleet in real trouble
+produces dozens at once, and a page you have to scroll to count is one that
+hides the scale of the problem. The node has its own column and links through,
+so the alert text does not repeat it.
+
 ### What fires
 
 | Condition | Severity |
