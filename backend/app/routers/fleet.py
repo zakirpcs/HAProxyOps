@@ -1,7 +1,10 @@
 """Read paths: fleet rollup, per-node detail, config view, search, audit."""
+import time
+
 from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import select
 
+from .. import alerting
 from ..config import get_settings
 from ..deps import CurrentUser, RequireAdmin, SessionDep
 from ..drivers import build_driver
@@ -128,6 +131,47 @@ async def search(
                     hits.append({**node, "kind": "server", "name": server["name"],
                                  "backend": backend["name"], "status": server["status"]})
     return {"query": q, "count": len(hits), "results": hits[:200]}
+
+
+@router.get("/alerts")
+async def alerts(_: CurrentUser) -> dict:
+    """What is wrong right now, and what has been announced.
+
+    Evaluated on demand from the cached snapshots, so the page works whether or
+    not a webhook is configured: seeing the current problems is useful either
+    way, and it doubles as a preview of what alerting *would* send once one is
+    set. Delivery is the only part that needs the webhook.
+    """
+    known = await alerting.load_state()
+    now = time.time()
+
+    items = []
+    for alert in alerting.evaluate(await get_all_snapshots()):
+        entry = known.get(alert.key, {})
+        since = entry.get("since", now)
+        notified = entry.get("notified")
+        items.append({
+            "key": alert.key,
+            "severity": alert.severity,
+            "title": alert.title,
+            "detail": alert.detail,
+            "node": alert.node,
+            "labels": alert.labels,
+            "since": since,
+            "for_seconds": max(0.0, now - since),
+            # "pending" is a real state, not a rounding of "firing": the problem
+            # is live but has not lasted long enough to be worth a message.
+            "state": "firing" if notified else "pending",
+        })
+
+    order = {"critical": 0, "warning": 1}
+    items.sort(key=lambda a: (order.get(a["severity"], 9), -a["for_seconds"]))
+    return {
+        "delivery_configured": bool(settings.alert_webhook_url),
+        "for_seconds": settings.alert_for_seconds,
+        "count": len(items),
+        "alerts": items,
+    }
 
 
 @router.get("/audit", response_model=list[AuditOut])

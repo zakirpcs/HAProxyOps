@@ -1,5 +1,6 @@
 import type {
-  AppUser, AuditEntry, FleetSummary, ManagedNode, NodeSnapshot, Role, SearchHit,
+  AlertsResponse, AppUser, AuditEntry, FleetSummary, ManagedNode, NodeSnapshot,
+  Role, SearchHit,
 } from "./types";
 
 const TOKEN_KEY = "haproxyops.token";
@@ -79,6 +80,8 @@ export const api = {
     ),
 
   logout: () => request<void>("/auth/logout", { method: "POST" }),
+
+  alerts: () => request<AlertsResponse>("/alerts"),
 
   audit: (limit = 200) => request<AuditEntry[]>(`/audit?limit=${limit}`),
 

@@ -702,6 +702,21 @@ HAPROXYOPS_ALERT_FOR_SECONDS=60        # how long a problem must last
 HAPROXYOPS_ALERT_REPEAT_SECONDS=3600   # 0 disables repeats
 ```
 
+### The Alerts page
+
+`/alerts` shows what is wrong right now, evaluated from the same rules the
+notifier uses — so it is not a second opinion that can disagree with the
+messages people receive, it is the same assessment shown rather than sent.
+
+It works with no webhook configured, and says so prominently when there is
+none: the page is useful either way, and it doubles as a preview of what
+alerting *would* deliver, but silence must never be mistaken for health.
+
+Each alert is marked **sent** or **pending**. Pending means live but not yet
+old enough to have been announced — a real state, not a rounding of "firing",
+and calling it sent would be a lie. Critical sorts above warning, then longest
+running first.
+
 ### What fires
 
 | Condition | Severity |

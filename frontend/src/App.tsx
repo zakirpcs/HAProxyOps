@@ -6,6 +6,7 @@ import Fleet from "./pages/Fleet";
 import NodeDetail from "./pages/NodeDetail";
 import Nodes from "./pages/Nodes";
 import Metrics from "./pages/Metrics";
+import Alerts from "./pages/Alerts";
 import Audit from "./pages/Audit";
 import Users from "./pages/Users";
 import FleetSearch from "./components/FleetSearch";
@@ -30,6 +31,7 @@ export default function App() {
           <Route path="/" element={<Fleet />} />
           <Route path="/metrics" element={<Metrics />} />
           <Route path="/nodes" element={<Nodes />} />
+          <Route path="/alerts" element={<Alerts />} />
           <Route path="/audit" element={<Audit />} />
           <Route path="/users" element={<Users />} />
           <Route path="/nodes/:nodeId" element={<NodeDetail />} />
@@ -73,6 +75,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
           <nav aria-label="Main" className="flex h-full shrink-0 items-stretch gap-0.5">
             <NavItem to="/" label="Fleet" active={pathname === "/"} />
             <NavItem to="/metrics" label="Metrics" active={pathname.startsWith("/metrics")} />
+            <NavItem to="/alerts" label="Alerts" active={pathname.startsWith("/alerts")} />
             <NavItem to="/nodes" label="Nodes" active={pathname.startsWith("/nodes")} />
             {/* Admin-only pages. They are guarded server-side too - hiding a
                 tab is presentation, never the access control itself. */}

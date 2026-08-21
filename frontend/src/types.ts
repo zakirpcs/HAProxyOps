@@ -140,3 +140,23 @@ export interface AppUser {
   is_active: boolean;
   created_at: string;
 }
+
+export interface CurrentAlert {
+  key: string;
+  severity: "critical" | "warning";
+  title: string;
+  detail: string;
+  node: string;
+  labels: Record<string, string | number>;
+  since: number;
+  for_seconds: number;
+  /** "pending" is live but not yet long enough to have been announced. */
+  state: "firing" | "pending";
+}
+
+export interface AlertsResponse {
+  delivery_configured: boolean;
+  for_seconds: number;
+  count: number;
+  alerts: CurrentAlert[];
+}
