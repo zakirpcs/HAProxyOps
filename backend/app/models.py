@@ -2,7 +2,15 @@
 from datetime import UTC, datetime
 from enum import StrEnum
 
-from sqlalchemy import Boolean, DateTime, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .db import Base
@@ -90,3 +98,43 @@ class AuditLog(Base):
     detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     success: Mapped[bool] = mapped_column(Boolean, default=True)
     source_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+class MaintenanceHold(Base):
+    """A server held out of rotation, with a time it should come back.
+
+    Forgetting to restore a drained server is the most common way to cause an
+    outage with this tool: capacity quietly stays halved until someone notices.
+    A hold records the intent - "out for thirty minutes" - so the poller can put
+    it back without anyone remembering to.
+
+    Kept in Postgres rather than Redis deliberately. If this state is lost the
+    server never returns, which is precisely the failure the feature exists to
+    prevent, so it belongs somewhere durable rather than in a cache that is
+    safe to flush.
+    """
+
+    __tablename__ = "maintenance_holds"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    node_id: Mapped[int] = mapped_column(ForeignKey("nodes.id", ondelete="CASCADE"), index=True)
+    backend: Mapped[str] = mapped_column(String(255))
+    server: Mapped[str] = mapped_column(String(255))
+
+    #: The state the server was put into: "drain" or "maint".
+    state: Mapped[str] = mapped_column(String(16))
+    #: What to restore it to when the hold expires.
+    revert_to: Mapped[str] = mapped_column(String(16), default="ready")
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    created_by: Mapped[str] = mapped_column(String(64))
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    #: Null while the hold is active. Set when it expires, is cancelled, or is
+    #: abandoned because someone changed the server's state by hand.
+    released_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    #: "expired" | "cancelled" | "superseded"
+    release_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)

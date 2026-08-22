@@ -67,10 +67,13 @@ export const api = {
       method: "POST",
     }),
 
-  setAdminState: (nodeId: number, backend: string, server: string, state: string) =>
+  setAdminState: (
+    nodeId: number, backend: string, server: string, state: string,
+    opts: { for_minutes?: number; reason?: string } = {},
+  ) =>
     request<unknown>(
       `/nodes/${nodeId}/backends/${encodeURIComponent(backend)}/servers/${encodeURIComponent(server)}/admin-state`,
-      { method: "PUT", body: JSON.stringify({ state }) },
+      { method: "PUT", body: JSON.stringify({ state, ...opts }) },
     ),
   // The API still exposes /weight, but the Data Plane API has no runtime weight
   // field so it always answers 501. Wire this up when config editing lands.

@@ -22,6 +22,15 @@ interface PendingAction {
   state: AdminState;
 }
 
+/** Auto-revert windows offered when taking a server out of rotation. */
+const WINDOWS: { minutes: number | null; label: string }[] = [
+  { minutes: null, label: "Until I put it back" },
+  { minutes: 15, label: "15 minutes" },
+  { minutes: 30, label: "30 minutes" },
+  { minutes: 60, label: "1 hour" },
+  { minutes: 240, label: "4 hours" },
+];
+
 export default function NodeDetail() {
   const { nodeId } = useParams();
   const id = Number(nodeId);
@@ -34,6 +43,9 @@ export default function NodeDetail() {
   const [pending, setPending] = useState<PendingAction | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  // Open-ended by default: a timed window is a promise to the operator, and
+  // one they did not ask for should never be made on their behalf.
+  const [holdMinutes, setHoldMinutes] = useState<number | null>(null);
   // Sections the operator opened or closed by hand, keyed by service name.
   // Anything absent falls back to the computed default, so typing in the
   // filter re-opens matches without wiping deliberate choices.
@@ -140,10 +152,15 @@ export default function NodeDetail() {
     setActionBusy(true);
     setActionError(null);
     try {
-      await api.setAdminState(id, backend, server, state);
+      const timed = state !== "ready" ? holdMinutes : null;
+      await api.setAdminState(id, backend, server, state,
+                              timed ? { for_minutes: timed } : {});
       setNotice({
         kind: "ok",
-        text: `${backend}/${server} set to ${state} - applied. State refreshes on next poll.`,
+        text: holdMinutes && state !== "ready"
+          ? `${backend}/${server} set to ${state} - returns to ready in ${
+              holdMinutes >= 60 ? `${holdMinutes / 60}h` : `${holdMinutes}m`}.`
+          : `${backend}/${server} set to ${state} - applied. State refreshes on next poll.`,
       });
       setPending(null);
     } catch (e) {
@@ -355,6 +372,31 @@ export default function NodeDetail() {
           setActionError(null);
         }}
       >
+        {pending && pending.state !== "ready" && (
+          <label className="block rounded border border-ink-700 bg-ink-800/60 px-3 py-2">
+            <span className="mb-1 block text-xs uppercase tracking-wider text-[var(--color-mute)]">
+              Put it back after
+            </span>
+            <select
+              value={holdMinutes ?? ""}
+              onChange={(e) => setHoldMinutes(e.target.value ? Number(e.target.value) : null)}
+              aria-label="Return to rotation after"
+              className="w-full rounded border border-ink-600 bg-ink-800 px-2 py-1.5 text-sm text-slate-200 outline-none focus:border-[var(--color-accent)]"
+            >
+              {WINDOWS.map((w) => (
+                <option key={String(w.minutes)} value={w.minutes ?? ""}>{w.label}</option>
+              ))}
+            </select>
+            <span className="mt-1 block text-xs text-[var(--color-mute)]">
+              {holdMinutes
+                ? "The dashboard returns it to rotation automatically. Health checks still " +
+                  "decide whether it takes traffic, and a later manual change cancels this."
+                : "Forgetting to restore a drained server is the usual way capacity stays " +
+                  "quietly halved. A window removes that risk."}
+            </span>
+          </label>
+        )}
+
         {pending && (
           <ServerActionSummary
             action={pending}

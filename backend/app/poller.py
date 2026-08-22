@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import select
 
-from . import alerting
+from . import alerting, maintenance
 from .config import get_settings
 from .db import SessionLocal
 from .drivers import build_driver
@@ -62,12 +62,26 @@ async def poll_once() -> int:
     if unreachable:
         log.warning("unreachable nodes: %s", ", ".join(unreachable))
 
+    as_dicts = [snapshot_to_dict(s) for s in snapshots]
+
     # After storing, so the dashboard is never waiting on a webhook, and
     # guarded so a broken receiver cannot stop the fleet being polled.
     try:
-        await alerting.run([snapshot_to_dict(s) for s in snapshots])
+        await alerting.run(as_dicts)
     except Exception:
         log.exception("alert evaluation failed")
+
+    # Expired maintenance windows, checked against the snapshots just taken so
+    # a hold is never enforced against a state it no longer matches.
+    try:
+        async with SessionLocal() as session:
+            await maintenance.sweep(
+                session,
+                {d["node_id"]: d for d in as_dicts},
+                settings.poll_timeout_seconds,
+            )
+    except Exception:
+        log.exception("maintenance sweep failed")
 
     return len(snapshots)
 

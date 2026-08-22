@@ -114,6 +114,25 @@ class ConnectionTest(BaseModel):
 
 class AdminStateRequest(BaseModel):
     state: str = Field(pattern="^(ready|maint|drain)$")
+    #: Minutes after which the server returns to rotation on its own. Omit for
+    #: an open-ended change, which is the previous behaviour and still the
+    #: default - a timed window has to be asked for.
+    for_minutes: int | None = Field(default=None, ge=1, le=10080)
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class HoldOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    node_id: int
+    backend: str
+    server: str
+    state: str
+    revert_to: str
+    created_at: datetime
+    expires_at: datetime
+    created_by: str
+    reason: str | None
 
 
 class WeightRequest(BaseModel):

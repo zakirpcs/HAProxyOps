@@ -237,6 +237,45 @@ never been access control, and each page also handles a 403 by explaining who
 may read it. That check reads the response **status**, not the message text:
 the API returns FastAPI's `Forbidden`, which says nothing about roles.
 
+### Timed maintenance windows
+
+Taking a server out offers a window — 15 minutes, an hour, four hours — after
+which the dashboard puts it back on its own. Forgetting to restore a drained
+server is the usual way capacity stays quietly halved for days.
+
+**Open-ended is the default.** A timed window is a promise, and one the
+operator did not ask for should never be made on their behalf.
+
+Holds live in Postgres, not Redis. If this state is lost the server never
+returns, which is precisely the failure the feature exists to prevent, so it
+belongs somewhere durable rather than in a cache that is safe to flush. The
+poller sweeps expired holds on its normal cycle.
+
+Auto-revert is a machine performing a runtime action unprompted, so three
+things bound it:
+
+- **Restoring means "stop holding it out", not "send it traffic".** `ready`
+  clears the administrative block; HAProxy's health checks still decide what
+  the server receives. A server that is still broken stays out, and the revert
+  costs nothing.
+- **A hold that no longer matches reality is abandoned, not enforced.** If the
+  server is not in the state its hold applied — someone changed it by hand
+  afterwards — that decision is newer, and overriding it would be worse than
+  leaving the server held. A manual change to a server also supersedes any open
+  hold on it immediately.
+- **Failure is retried, never swallowed.** A node unreachable at expiry keeps
+  its hold and is tried again next cycle. Dropping it is how a server stays
+  drained forever.
+
+Every transition is audited, including the automatic one, which appears under
+the `system` user:
+
+```
+admin   maintenance.scheduled  app-back/web2  Returns to ready at … (1m).
+system  maintenance.expired    app-back/web2  Returned to ready after the drain
+                                              window set by admin ended.
+```
+
 ### Confirming destructive actions
 
 Every confirmation is a `ConfirmDialog` (built on the same `<dialog>`); there

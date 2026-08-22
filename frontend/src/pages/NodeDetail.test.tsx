@@ -281,6 +281,62 @@ describe("NodeDetail action flow", () => {
     expect(adminCalls(calls)).toHaveLength(0);
   });
 
+  it("offers an auto-revert window when taking a server out", async () => {
+    const user = userEvent.setup();
+    installApi();
+    show();
+    await screen.findByText("web1");
+
+    await user.click(screen.getAllByRole("button", { name: /^Drain/ })[0]);
+
+    const picker = await screen.findByRole("combobox", { name: /Return to rotation after/ });
+    expect(picker).toHaveValue("");  // open-ended by default
+    expect(screen.getByText(/quietly halved/)).toBeInTheDocument();
+  });
+
+  it("does not offer a window for putting a server back", async () => {
+    const user = userEvent.setup();
+    installApi();
+    show();
+    await screen.findByText("web3");
+
+    // "ready" applies immediately and has nothing to revert.
+    const row = screen.getByText("web3").closest("tr")!;
+    await user.click(within(row).getByRole("button", { name: /^Ready/ }));
+
+    expect(screen.queryByRole("combobox", { name: /Return to rotation after/ }))
+      .not.toBeInTheDocument();
+  });
+
+  it("sends no window unless one was chosen", async () => {
+    const user = userEvent.setup();
+    const calls = installApi();
+    show();
+    await screen.findByText("web1");
+
+    await user.click(screen.getAllByRole("button", { name: /^Drain/ })[0]);
+    await user.click(await screen.findByRole("button", { name: "Set drain" }));
+
+    await waitFor(() => expect(adminCalls(calls)).toHaveLength(1));
+    // A timed window is a promise; never make one the operator did not ask for.
+    expect(adminCalls(calls)[0].body).toEqual({ state: "drain" });
+  });
+
+  it("sends the chosen window with the change", async () => {
+    const user = userEvent.setup();
+    const calls = installApi();
+    show();
+    await screen.findByText("web1");
+
+    await user.click(screen.getAllByRole("button", { name: /^Drain/ })[0]);
+    await user.selectOptions(
+      await screen.findByRole("combobox", { name: /Return to rotation after/ }), "30");
+    await user.click(screen.getByRole("button", { name: "Set drain" }));
+
+    await waitFor(() => expect(adminCalls(calls)).toHaveLength(1));
+    expect(adminCalls(calls)[0].body).toEqual({ state: "drain", for_minutes: 30 });
+  });
+
   it("no longer renders graphs - those moved to the Metrics page", async () => {
     // Guards the split: the node page answers "what is it doing now", and
     // re-adding a metrics panel here would quietly restore the duplication.
