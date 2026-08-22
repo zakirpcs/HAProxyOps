@@ -112,6 +112,16 @@ class ConnectionTest(BaseModel):
     capabilities: list[str] = []
 
 
+class RawConfigRequest(BaseModel):
+    #: The whole configuration file. Partial writes are not offered: HAProxy
+    #: validates a complete config, and a merge done here would be a second
+    #: parser to get wrong.
+    config: str = Field(min_length=1, max_length=1_000_000)
+    #: The version the edit was based on. HAProxy refuses the write if the
+    #: config has changed since, so a concurrent edit cannot be clobbered.
+    version: str
+
+
 class AdminStateRequest(BaseModel):
     state: str = Field(pattern="^(ready|maint|drain)$")
     #: Minutes after which the server returns to rotation on its own. Omit for

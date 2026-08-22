@@ -21,3 +21,9 @@ secrets/
 *.pem
 *.key
 *.crt
+
+# Runtime artefacts, not source
+# Data Plane API's last-known-good config copy
+*.lkg
+# TypeScript incremental build cache
+*.tsbuildinfo

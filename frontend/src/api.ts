@@ -54,6 +54,16 @@ export const api = {
   fleet: () => request<{ nodes: NodeSnapshot[]; summary: FleetSummary }>("/fleet"),
   nodeState: (id: number) => request<NodeSnapshot>(`/nodes/${id}/state`),
   nodeConfig: (id: number) => request<NodeConfig>(`/nodes/${id}/config`),
+  rawConfig: (id: number) =>
+    request<{ node: string; config: string; version: string }>(`/nodes/${id}/config/raw`),
+  validateConfig: (id: number, config: string, version: string) =>
+    request<{ valid: boolean; message: string }>(`/nodes/${id}/config/validate`, {
+      method: "POST", body: JSON.stringify({ config, version }),
+    }),
+  applyConfig: (id: number, config: string, version: string) =>
+    request<{ ok: boolean; node: string; lines: number }>(`/nodes/${id}/config/raw`, {
+      method: "PUT", body: JSON.stringify({ config, version }),
+    }),
 
   listNodes: () => request<ManagedNode[]>("/nodes"),
   createNode: (body: Record<string, unknown>) =>

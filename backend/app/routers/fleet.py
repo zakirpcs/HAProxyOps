@@ -1,16 +1,22 @@
 """Read paths: fleet rollup, per-node detail, config view, search, audit."""
 import time
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from sqlalchemy import select
 
 from .. import alerting
 from ..config import get_settings
-from ..deps import CurrentUser, RequireAdmin, SessionDep
+from ..deps import CurrentUser, RequireAdmin, SessionDep, write_audit
 from ..drivers import build_driver
-from ..drivers.base import DriverError, UnsupportedOperation
+from ..drivers.base import (
+    Capability,
+    ConfigConflict,
+    ConfigRejected,
+    DriverError,
+    UnsupportedOperation,
+)
 from ..models import AuditLog, Node
-from ..schemas import AuditOut
+from ..schemas import AuditOut, RawConfigRequest
 from ..security import decrypt_secret
 from ..state import get_all_snapshots, get_snapshot
 
@@ -106,6 +112,116 @@ async def node_config(node_id: int, _: CurrentUser, session: SessionDep) -> dict
     finally:
         if driver is not None:
             await driver.aclose()
+
+
+@router.get("/nodes/{node_id}/config/raw")
+async def node_raw_config(node_id: int, _: RequireAdmin, session: SessionDep) -> dict:
+    """The configuration file and the version needed to write it back.
+
+    Admin only, and admin only for reading too: a full config can contain
+    credentials in `userlist` blocks, TLS paths, and internal addressing that
+    an operator with drain rights has no reason to see.
+    """
+    node, driver = await _config_driver(session, node_id)
+    try:
+        config, version = await driver.fetch_raw_config()
+        return {"node": node.name, "config": config, "version": version}
+    except UnsupportedOperation as exc:
+        raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, str(exc)) from exc
+    except DriverError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+    finally:
+        await driver.aclose()
+
+
+@router.post("/nodes/{node_id}/config/validate")
+async def validate_config(
+    node_id: int, payload: RawConfigRequest, user: RequireAdmin,
+    session: SessionDep, request: Request,
+) -> dict:
+    """Check a configuration without applying it.
+
+    HAProxy does the checking, so this is the same validation the apply path
+    runs - a dry run, not a weaker approximation of one.
+    """
+    node, driver = await _config_driver(session, node_id)
+    try:
+        await driver.push_raw_config(payload.config, payload.version, validate_only=True)
+    except ConfigRejected as exc:
+        # Not an error condition: finding out a config is bad is the point.
+        return {"valid": False, "message": str(exc)}
+    except ConfigConflict as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except UnsupportedOperation as exc:
+        raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, str(exc)) from exc
+    except DriverError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+    finally:
+        await driver.aclose()
+
+    await write_audit(session, request, user, "config.validate", node_name=node.name,
+                      detail=f"{len(payload.config.splitlines())} lines validated")
+    await session.commit()
+    return {"valid": True, "message": "HAProxy accepted this configuration."}
+
+
+@router.put("/nodes/{node_id}/config/raw")
+async def apply_config(
+    node_id: int, payload: RawConfigRequest, user: RequireAdmin,
+    session: SessionDep, request: Request,
+) -> dict:
+    """Apply a configuration and reload the node.
+
+    The version is checked by HAProxy, not here: anything else would be a
+    race, because the config can change between our read and our write. A
+    mismatch is a 409 and nothing is written.
+
+    Audited before the attempt as well as after, so a config that takes the
+    node down still leaves a record of who applied it and what they sent.
+    """
+    node, driver = await _config_driver(session, node_id)
+    lines = len(payload.config.splitlines())
+    try:
+        await driver.push_raw_config(payload.config, payload.version, validate_only=False)
+    except ConfigRejected as exc:
+        await write_audit(session, request, user, "config.apply", node_name=node.name,
+                          detail=f"rejected: {exc}", success=False)
+        await session.commit()
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    except ConfigConflict as exc:
+        await write_audit(session, request, user, "config.apply", node_name=node.name,
+                          detail=f"conflict: {exc}", success=False)
+        await session.commit()
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except UnsupportedOperation as exc:
+        raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, str(exc)) from exc
+    except DriverError as exc:
+        await write_audit(session, request, user, "config.apply", node_name=node.name,
+                          detail=f"failed: {exc}", success=False)
+        await session.commit()
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+    finally:
+        await driver.aclose()
+
+    await write_audit(session, request, user, "config.apply", node_name=node.name,
+                      detail=f"{lines} lines applied and reloaded")
+    await session.commit()
+    return {"ok": True, "node": node.name, "lines": lines}
+
+
+async def _config_driver(session, node_id: int):
+    node = await session.get(Node, node_id)
+    if node is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Node not found")
+    password = decrypt_secret(node.password_encrypted) if node.password_encrypted else None
+    driver = build_driver(node, password=password, timeout=settings.poll_timeout_seconds)
+    if Capability.WRITE_CONFIG not in getattr(driver, "capabilities", ()):
+        await driver.aclose()
+        raise HTTPException(
+            status.HTTP_501_NOT_IMPLEMENTED,
+            "This node's transport cannot read or write configuration.",
+        )
+    return node, driver
 
 
 @router.get("/search")

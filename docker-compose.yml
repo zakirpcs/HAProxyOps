@@ -60,7 +60,16 @@ services:
   haproxy-demo:
     image: docker.io/haproxytech/haproxy-alpine:3.0
     volumes:
-      - ./demo/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+      # This node owns its config directory so the editor can write to it.
+      # Applying makes HAProxy rename a temp file over haproxy.cfg, and a
+      # bind-mounted *file* cannot be replaced that way ("device or resource
+      # busy") - a real node has its config on its own filesystem, so mounting
+      # the directory is the truthful setup as well as the working one.
+      #
+      # It starts as a copy of demo/haproxy.cfg, which the other edge node
+      # still mounts read-only. Editing lb-edge-1 changes only this copy, which
+      # is the point: the other nodes stay a fixed reference to compare against.
+      - ./demo/etc-edge1:/usr/local/etc/haproxy
       - ./demo/dataplaneapi-start.sh:/usr/local/bin/dataplaneapi-start.sh:ro
     ports:
       - "8404:8404"   # stats page

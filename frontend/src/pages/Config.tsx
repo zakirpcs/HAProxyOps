@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import { api } from "../api";
 import { useFleet } from "../useFleet";
 import { Panel } from "../components/ui";
+import ConfigEditor from "../components/ConfigEditor";
 import {
   describe as describeConfig, diffConfigs,
   type FieldDiff, type NodeConfig, type ProxyDiff,
@@ -29,6 +30,9 @@ export default function Config() {
 
   const [leftId, setLeftId] = useState<number | null>(null);
   const [rightId, setRightId] = useState<number | null>(null);
+  // Editing is per node, so it is offered only when one is in view. Comparing
+  // two and editing one at the same time is a good way to edit the wrong one.
+  const [editing, setEditing] = useState(false);
 
   const left = options.find((n) => n.node_id === leftId) ?? options[0] ?? null;
   const right = rightId === null ? null : options.find((n) => n.node_id === rightId) ?? null;
@@ -92,6 +96,21 @@ export default function Config() {
           </select>
         </label>
 
+        {!right && (
+          <button
+            type="button"
+            onClick={() => setEditing((v) => !v)}
+            aria-pressed={editing}
+            className={`rounded border px-2.5 py-1 text-xs transition ${
+              editing
+                ? "border-[var(--color-accent)] bg-[var(--color-accent)]/15 text-[var(--color-accent)]"
+                : "border-ink-600 bg-ink-800 text-[var(--color-mute)] hover:text-slate-200"
+            }`}
+          >
+            {editing ? "Stop editing" : "Edit"}
+          </button>
+        )}
+
         {diff && (
           <span className={`text-xs font-medium ${
             diff.changed === 0 ? "text-[var(--color-up)]" : "text-[var(--color-drain)]"
@@ -110,6 +129,10 @@ export default function Config() {
             : (q.error as Error).message}
         </p>
       ))}
+
+      {editing && !right && left && (
+        <ConfigEditor nodeId={left.node_id} nodeName={left.node_name} />
+      )}
 
       {diff ? (
         <>

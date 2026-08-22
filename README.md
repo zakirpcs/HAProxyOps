@@ -540,6 +540,43 @@ service's health down.
 Nodes on the stats-page driver cannot serve configuration; the page says so
 rather than showing a bare `501`.
 
+### Editing configuration
+
+Admin only, on the Config page behind an **Edit** toggle, and offered only when
+a single node is in view — comparing two nodes while editing one is a good way
+to edit the wrong one.
+
+The flow is read → edit → validate → apply, and the safety is HAProxy's rather
+than this UI's:
+
+- **Validation is HAProxy's own.** The same check runs on apply, so an invalid
+  config cannot be written even if the screen is bypassed. A rejection carries
+  HAProxy's own diagnostic — *"unable to find required default_backend: 'x'"* —
+  not a generic failure.
+- **The node checks the version.** An edit based on a stale read is refused with
+  a 409, so a concurrent edit cannot be silently overwritten. This is checked by
+  the node, not here: anything else would be a race, because the config can
+  change between the read and the write.
+- **Applying requires validating first.** The server would validate anyway;
+  requiring it in the UI is what makes an operator *read* the result rather than
+  clicking past it. Any further edit re-arms the gate, because the previous
+  result was for different text.
+
+Reading the raw config is admin-only too, not just writing: a full config can
+contain `userlist` credentials, TLS paths and internal addressing that an
+operator with drain rights has no reason to see.
+
+Both attempts and outcomes are audited. A failed apply is recorded *before* it
+is raised, so a config that takes a node down still leaves a record of who
+applied it.
+
+**The Data Plane API rewrites the file rather than storing it verbatim.** It
+prepends its own `_md5hash` and `_version` comments, re-indents, and drops bare
+comment lines. Every directive survives — verified by round-tripping a real
+config and confirming each section — but formatting and blank-line comments do
+not. The editor says so above the text area, because finding your file
+reformatted after a deploy is otherwise an unpleasant surprise.
+
 ### Service view
 
 The node page groups each frontend with the backends it routes to, read from
@@ -976,13 +1013,11 @@ Deliberately out of scope for this version, in the order they make sense:
    broken — see [Known transport differences](#known-transport-differences).
 2. **Alerting** on backend degradation. The fleet status indicator makes trouble
    visible while someone is looking; alerting is what covers the rest of the day.
-3. **Config editing** through the same transactions, now that the read-only
-   [config viewer](#configuration-and-diff) exists.
-4. **Routing chosen by Lua.** The service view is built from
+3. **Routing chosen by Lua.** The service view is built from
    `default_backend` and backend switching rules, which covers the ways HAProxy
    config selects a backend. A backend chosen by a Lua action is invisible to
    both and appears under **Unrouted backends**.
-5. **Service grouping for the stats-page driver.** It cannot read configuration,
+4. **Service grouping for the stats-page driver.** It cannot read configuration,
    so those nodes fall back to flat frontend and backend lists. A Runtime API
    socket driver would close this and remove the Data Plane API dependency.
-6. **SSO (OIDC)** instead of local accounts.
+5. **SSO (OIDC)** instead of local accounts.

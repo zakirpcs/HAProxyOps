@@ -18,6 +18,7 @@ class Capability(StrEnum):
     READ_CONFIG = "read_config"
     SET_ADMIN_STATE = "set_admin_state"
     SET_WEIGHT = "set_weight"
+    WRITE_CONFIG = "write_config"
 
 
 class AdminState(StrEnum):
@@ -141,12 +142,34 @@ class UnsupportedOperation(DriverError):
     """The node's transport cannot perform this action."""
 
 
+class ConfigRejected(DriverError):
+    """HAProxy refused the configuration.
+
+    Separate from DriverError because the two need opposite responses: a
+    rejected config is the operator's to fix and carries HAProxy's own
+    diagnostics, while a transport failure says nothing about the config.
+    """
+
+
+class ConfigConflict(DriverError):
+    """The node's configuration changed since it was read.
+
+    Applying anyway would silently discard whoever got there first.
+    """
+
+
 class HAProxyDriver(Protocol):
     capabilities: tuple[Capability, ...]
 
     async def fetch_snapshot(self) -> NodeSnapshot: ...
 
     async def fetch_config(self) -> dict[str, Any]: ...
+
+    async def fetch_raw_config(self) -> tuple[str, str]: ...
+
+    async def push_raw_config(
+        self, config: str, version: str, *, validate_only: bool
+    ) -> None: ...
 
     async def set_server_admin_state(
         self, backend: str, server: str, state: AdminState

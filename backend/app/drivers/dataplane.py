@@ -21,6 +21,8 @@ from .base import (
     AdminState,
     BackendStat,
     Capability,
+    ConfigConflict,
+    ConfigRejected,
     DriverError,
     FrontendStat,
     NodeInfo,
@@ -87,6 +89,7 @@ class DataPlaneDriver:
             Capability.READ_STATE,
             Capability.READ_CONFIG,
             Capability.SET_ADMIN_STATE,
+            Capability.WRITE_CONFIG,
         )
 
     # -- transport ----------------------------------------------------------
@@ -194,6 +197,66 @@ class DataPlaneDriver:
             f["name"]: (f.get("default_backend") or None, rules)
             for f, rules in zip(frontends, rule_lists, strict=True)
         }
+
+    async def fetch_raw_config(self) -> tuple[str, str]:
+        """The configuration file as text, with the version that produced it.
+
+        The version is what makes a later write safe: it is passed back on
+        apply, and the node refuses the write if anything changed in between.
+        """
+        # Fetched directly rather than through _request: this endpoint answers
+        # with the config file as plain text, and _request insists on JSON.
+        url = f"{self.prefix}/services/haproxy/configuration/raw"
+        try:
+            response = await self._client.get(url)
+        except httpx.HTTPError as exc:
+            raise DriverError(f"{type(exc).__name__}: {exc}") from exc
+        if response.status_code == 404:
+            raise UnsupportedOperation("this node does not expose its raw configuration")
+        if response.status_code >= 400:
+            raise DriverError(f"HTTP {response.status_code}: {response.text[:300]}")
+
+        raw = response.text
+        # Some versions wrap it in {"data": "..."} rather than returning text.
+        if raw.lstrip().startswith("{"):
+            try:
+                raw = response.json().get("data", raw)
+            except ValueError:
+                pass
+
+        version = await self._request("GET", "/configuration/version")
+        return raw, str(version)
+
+    async def push_raw_config(
+        self, config: str, version: str, *, validate_only: bool
+    ) -> None:
+        """Validate, or validate and apply, a whole configuration.
+
+        HAProxy validates either way - there is no path that applies an invalid
+        config - so ``validate_only`` is a dry run with identical checking, not
+        a weaker one.
+        """
+        params: dict[str, Any] = {"version": version}
+        if validate_only:
+            params["only_validate"] = "true"
+
+        url = f"{self.prefix}/services/haproxy/configuration/raw"
+        try:
+            response = await self._client.post(
+                url, params=params, content=config.encode(),
+                headers={"Content-Type": "text/plain"},
+            )
+        except httpx.HTTPError as exc:
+            raise DriverError(f"{type(exc).__name__}: {exc}") from exc
+
+        if response.status_code == 409:
+            raise ConfigConflict(_message_from(response))
+        if response.status_code == 400:
+            raise ConfigRejected(_message_from(response))
+        if response.status_code == 401:
+            raise DriverError("authentication rejected by Data Plane API (401)")
+        if response.status_code >= 400:
+            raise DriverError(f"HTTP {response.status_code}: {response.text[:500]}")
 
     def _runtime_server_path(self, backend: str, server: str) -> tuple[str, dict]:
         """Path and query for one runtime server. The two API versions differ.
@@ -362,3 +425,12 @@ def _server_from(name: str, backend: str, s: dict) -> ServerStat:
         downtime_seconds=as_int(pick(s, "downtime")),
         last_change_seconds=as_int(pick(s, "lastchg")),
     )
+
+
+def _message_from(response: httpx.Response) -> str:
+    """HAProxy's own diagnostic, which is the only useful part of a rejection."""
+    try:
+        body = response.json()
+    except ValueError:
+        return response.text[:500]
+    return str(body.get("message") or body)[:1000]
