@@ -1006,21 +1006,22 @@ Things already load-bearing that will need work before they bite:
   for them.
 - **Row virtualisation** in the fleet table, which is plain DOM and comfortable
   into the high hundreds of nodes.
-- **Node detail renders every backend expanded** on each poll. Fine for a
-  handful; on a node with dozens of backends, collapse healthy ones by default
-  and auto-open only degraded ones.
+- **The scale fix is unmeasured since it landed.** A 120-frontend node rendered
+  31,227 DOM elements before the node page became problems-first; collapsing
+  backends alone took that to 5,427. The problems-first path should be lower
+  again, but that has not been re-measured.
 
 ### Not built yet
 
 Deliberately out of scope for this version, in the order they make sense:
 
-1. **Config editing** via Data Plane API transactions (diff → validate → commit
-   → reload). This is also what unlocks weight changes: the runtime API exposes
-   no weight field in either v2 or v3, so the capability is absent rather than
-   broken — see [Known transport differences](#known-transport-differences).
-2. **Alerting** on backend degradation. The fleet status indicator makes trouble
-   visible while someone is looking; alerting is what covers the rest of the day.
-3. **SSO (OIDC)** instead of local accounts.
+1. **Runtime weight changes.** The Data Plane API exposes no weight field in
+   either v2 or v3, so the capability is absent rather than broken — see
+   [Known transport differences](#known-transport-differences). Changing a
+   weight means a configuration change, which
+   [config editing](#editing-configuration) can now make, but a runtime-only
+   adjustment still has nowhere to go.
+2. **SSO (OIDC)** instead of local accounts.
 
 **Service grouping for the stats-page driver is not achievable**, and the
 earlier claim that a Runtime API socket driver would close it was wrong.
