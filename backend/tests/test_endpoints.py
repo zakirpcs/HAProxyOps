@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.deps import current_user, get_session
 from app.models import Base, Node, Role, User
+from app.routers import auth as auth_router
 from app.routers import fleet as fleet_router
 from app.routers import metrics as metrics_router
 
@@ -36,6 +37,7 @@ async def ctx():
     app = FastAPI()
     app.include_router(metrics_router.router)
     app.include_router(fleet_router.router)
+    app.include_router(auth_router.router)
 
     async def _session():
         async with maker() as session:
@@ -276,6 +278,7 @@ async def anon_client():
     app = FastAPI()
     app.include_router(metrics_router.router)
     app.include_router(fleet_router.router)
+    app.include_router(auth_router.router)
 
     async def _session():
         async with maker() as session:
@@ -306,4 +309,213 @@ async def test_every_route_refuses_an_anonymous_caller(anon_client, path):
 async def test_the_audit_log_is_admin_only(ctx):
     ctx["role"]["value"] = Role.VIEWER
     r = await ctx["client"].get("/api/audit")
+    assert r.status_code == 403
+
+
+# --- search -----------------------------------------------------------------
+
+def _hit_snapshot():
+    return {
+        "node_id": 3, "node_name": "lb-internal-1", "reachable": True, "enabled": True,
+        "frontends": [{"name": "internal-api", "status": "OPEN"}],
+        "backends": [{
+            "name": "api-back", "status": "UP",
+            "servers": [
+                {"name": "web1", "status": "UP", "address": "10.0.0.11:8080"},
+                {"name": "web2", "status": "DOWN", "address": "10.0.0.12:8080"},
+            ],
+        }],
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("query,kind,name", [
+    ("internal-api", "frontend", "internal-api"),
+    ("api-back", "backend", "api-back"),
+    ("web1", "server", "web1"),
+])
+async def test_search_finds_each_kind_of_object(ctx, monkeypatch, query, kind, name):
+    async def snaps():
+        return [_hit_snapshot()]
+
+    monkeypatch.setattr(fleet_router, "get_all_snapshots", snaps)
+    r = await ctx["client"].get(f"/api/search?q={query}")
+
+    assert r.status_code == 200
+    hit = next(h for h in r.json()["results"] if h["kind"] == kind)
+    assert hit["name"] == name
+    # The node is the answer to "which node serves this?"; a hit without it
+    # would be useless.
+    assert hit["node_name"] == "lb-internal-1"
+    assert hit["node_id"] == 3
+
+
+@pytest.mark.asyncio
+async def test_search_matches_a_server_by_address(ctx, monkeypatch):
+    # Operators look up an IP as often as a name, usually from a log line.
+    async def snaps():
+        return [_hit_snapshot()]
+
+    monkeypatch.setattr(fleet_router, "get_all_snapshots", snaps)
+    r = await ctx["client"].get("/api/search?q=10.0.0.12")
+
+    assert [h["name"] for h in r.json()["results"]] == ["web2"]
+
+
+@pytest.mark.asyncio
+async def test_search_ignores_case(ctx, monkeypatch):
+    async def snaps():
+        return [_hit_snapshot()]
+
+    monkeypatch.setattr(fleet_router, "get_all_snapshots", snaps)
+    r = await ctx["client"].get("/api/search?q=INTERNAL-API")
+
+    assert r.json()["count"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_search_reports_the_true_count_while_capping_results(ctx, monkeypatch):
+    """The cap must not silently shrink the count.
+
+    The UI tells the operator how many matches it is *not* showing, which is
+    only honest if count is the real total.
+    """
+    async def snaps():
+        return [{
+            "node_id": 1, "node_name": "big", "reachable": True, "enabled": True,
+            "frontends": [{"name": f"fe-{i}", "status": "OPEN"} for i in range(300)],
+            "backends": [],
+        }]
+
+    monkeypatch.setattr(fleet_router, "get_all_snapshots", snaps)
+    r = await ctx["client"].get("/api/search?q=fe-")
+    body = r.json()
+
+    assert body["count"] == 300
+    assert len(body["results"]) == 200
+
+
+@pytest.mark.asyncio
+async def test_search_rejects_an_empty_query(ctx):
+    # Everything matches an empty string, which is a way to dump the fleet.
+    r = await ctx["client"].get("/api/search?q=")
+    assert r.status_code == 422
+
+
+# --- audit ------------------------------------------------------------------
+
+async def _add_audit(maker, rows):
+    from app.models import AuditLog
+    async with maker() as session:
+        for username, action, when in rows:
+            session.add(AuditLog(username=username, action=action, at=when, success=True))
+        await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_audit_returns_newest_first(ctx):
+    from datetime import UTC, datetime, timedelta
+
+    now = datetime.now(UTC)
+    await _add_audit(ctx["maker"], [
+        ("old", "node.create", now - timedelta(hours=2)),
+        ("new", "server.admin_state", now),
+        ("mid", "config.apply", now - timedelta(hours=1)),
+    ])
+    r = await ctx["client"].get("/api/audit")
+
+    assert r.status_code == 200
+    assert [e["username"] for e in r.json()] == ["new", "mid", "old"]
+
+
+@pytest.mark.asyncio
+async def test_audit_honours_its_limit(ctx):
+    from datetime import UTC, datetime, timedelta
+
+    now = datetime.now(UTC)
+    await _add_audit(ctx["maker"],
+                     [(f"u{i}", "a", now - timedelta(minutes=i)) for i in range(10)])
+    r = await ctx["client"].get("/api/audit?limit=3")
+
+    assert len(r.json()) == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limit,expected", [(0, 422), (1, 200), (1000, 200), (1001, 422)])
+async def test_the_audit_limit_is_bounded(ctx, limit, expected):
+    # Unbounded, one request could pull the entire history into memory.
+    r = await ctx["client"].get(f"/api/audit?limit={limit}")
+    assert r.status_code == expected
+
+
+# --- users ------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_users_lists_accounts_alphabetically(ctx):
+    async with ctx["maker"]() as session:
+        for name in ("zoe", "adam"):
+            session.add(User(username=name, password_hash="x", role=Role.VIEWER))
+        await session.commit()
+
+    r = await ctx["client"].get("/api/auth/users")
+    assert [u["username"] for u in r.json()] == ["adam", "zoe"]
+
+
+@pytest.mark.asyncio
+async def test_creating_a_user_hashes_the_password_and_never_returns_it(ctx):
+    r = await ctx["client"].post("/api/auth/users", json={
+        "username": "newbie", "password": "correct horse battery", "role": "operator"})
+
+    assert r.status_code == 201
+    body = r.json()
+    assert body["username"] == "newbie"
+    assert body["role"] == "operator"
+    # The response model must not carry the hash, let alone the password.
+    assert "password" not in body and "password_hash" not in body
+
+    async with ctx["maker"]() as session:
+        from sqlalchemy import select as sa_select
+        user = await session.scalar(sa_select(User).where(User.username == "newbie"))
+    assert user.password_hash != "correct horse battery"
+    from app.security import verify_password
+    assert verify_password("correct horse battery", user.password_hash)
+
+
+@pytest.mark.asyncio
+async def test_a_duplicate_username_is_refused(ctx):
+    payload = {"username": "dup", "password": "a-long-enough-password", "role": "viewer"}
+    assert (await ctx["client"].post("/api/auth/users", json=payload)).status_code == 201
+    second = await ctx["client"].post("/api/auth/users", json=payload)
+    # 409, not a 500 from the unique constraint.
+    assert second.status_code == 409
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("password,expected", [
+    ("short", 422),
+    ("just-long-enough", 201),
+])
+async def test_passwords_have_a_minimum_length(ctx, password, expected):
+    r = await ctx["client"].post("/api/auth/users", json={
+        "username": f"u{len(password)}", "password": password, "role": "viewer"})
+    assert r.status_code == expected
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_role_is_refused(ctx):
+    r = await ctx["client"].post("/api/auth/users", json={
+        "username": "x", "password": "a-long-enough-password", "role": "superuser"})
+    assert r.status_code == 422
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method,path", [
+    ("get", "/api/auth/users"),
+    ("post", "/api/auth/users"),
+])
+async def test_user_management_is_admin_only(ctx, method, path):
+    ctx["role"]["value"] = Role.OPERATOR
+    call = getattr(ctx["client"], method)
+    r = await call(path, json={"username": "x", "password": "a-long-password",
+                               "role": "viewer"}) if method == "post" else await call(path)
     assert r.status_code == 403

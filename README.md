@@ -618,9 +618,14 @@ distinction is not academic: `/nodes/{id}/config` had nine frontend tests
 covering the page and none covering the route, so when a driver method vanished
 it returned 500 in production with every suite still green. `tests/test_endpoints.py`
 assembles the routers without the app's lifespan — no migrations, no poller — and
-exercises status codes, bounds, and the auth guard on each. One fixture
-deliberately omits the auth override, because overriding it everywhere would
-hide a route that had lost its guard.
+covers metrics, alerts, search, audit and users: status codes, bounds, ordering,
+and the guard on each. One fixture deliberately omits the auth override, because
+overriding it everywhere would hide a route that had lost its guard.
+
+Each is mutation-checked rather than assumed. Storing a password in clear,
+dropping the admin guard from user management, unbounding the audit limit,
+reversing the audit order, shrinking the search count to match its cap, and
+losing address matching in search all fail the suite.
 
 The text-file check exists because of a defect that reached the repository: a
 stray NUL byte in `bulk.ts`, used as a join separator. It compiled, it ran, and
