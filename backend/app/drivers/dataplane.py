@@ -9,6 +9,7 @@ helpers below rather than scattered through the reads.
 from __future__ import annotations
 
 import asyncio
+import logging
 import ssl
 import time
 from typing import Any
@@ -56,6 +57,8 @@ def build_http_client(node: Node, password: str | None, timeout: float) -> httpx
 
 #: How long routing may be reused on v2, which has no configuration version to
 #: invalidate against. Topology changes on deploys, not between polls.
+log = logging.getLogger("haproxyops")
+
 CONFIG_TTL_SECONDS = 300.0
 
 #: Routing cache, keyed by node id: ``{node_id: (config_key, routing)}``.
@@ -191,14 +194,6 @@ class DataPlaneDriver:
             f["name"]: (f.get("default_backend") or None, rules)
             for f, rules in zip(frontends, rule_lists, strict=True)
         }
-
-    async def fetch_config(self) -> dict[str, Any]:
-        """Read-only config view: declared frontends and backends."""
-        frontends = await self._request("GET", "/configuration/frontends")
-        backends = await self._request("GET", "/configuration/backends")
-        return {"frontends": _unwrap(frontends), "backends": _unwrap(backends)}
-
-    # -- runtime actions ----------------------------------------------------
 
     def _runtime_server_path(self, backend: str, server: str) -> tuple[str, dict]:
         """Path and query for one runtime server. The two API versions differ.

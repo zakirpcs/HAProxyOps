@@ -451,7 +451,10 @@ function ServiceSection({
   compact: boolean;
 }) {
   const health = serviceHealth(service);
-  const targets = service.backends.map((b) => b.name).concat(service.missing);
+  const targets = service.backends
+    .map((b) => b.name)
+    .concat(service.missing)
+    .concat(service.dynamic);
   const serversDown = service.backends.reduce(
     (n, b) => n + b.servers.filter((sv) => !sv.is_up && !sv.backup).length, 0);
 
@@ -506,7 +509,8 @@ function ServiceSection({
         <FrontendTable frontends={[service.frontend]} />
       </div>
 
-      {(service.backends.length > 0 || service.missing.length > 0) && (
+      {(service.backends.length > 0 || service.missing.length > 0
+        || service.dynamic.length > 0) && (
         <div className="space-y-2 border-t border-ink-700 px-3 py-2">
           <RoleLabel block>
             {service.backends.length + service.missing.length === 1 ? "Backend" : "Backends"}
@@ -530,6 +534,16 @@ function ServiceSection({
                className="rounded border border-[var(--color-down)]/40 bg-[var(--color-down)]/10 px-3 py-1.5 text-xs text-[var(--color-down)]">
               <span className="font-mono">{name}</span> is routed to but reports no
               statistics &mdash; the running config and the loaded config disagree.
+            </p>
+          ))}
+
+          {/* Not a problem, so it must not look like one: the target is an
+              expression evaluated per request, not a backend that vanished. */}
+          {service.dynamic.map((expr) => (
+            <p key={expr}
+               className="rounded border border-ink-700 bg-ink-800/50 px-3 py-1.5 text-xs text-[var(--color-mute)]">
+              <span className="font-mono text-slate-300">{expr}</span> selects a backend
+              per request, so which one it reaches cannot be shown here.
             </p>
           ))}
         </div>

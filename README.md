@@ -528,6 +528,15 @@ Two comparisons are deliberately *not* reported as differences:
 Array order *is* compared, because rule order is behaviour in HAProxy — sorting
 rule lists before comparing would hide a reordering that changes routing.
 
+Dynamic targets are recognised rather than mistaken for faults. HAProxy allows
+a fetch expression as a `use_backend` target — `use_backend
+%[req.hdr(x-tenant),lower]` — and the Data Plane API reports that expression
+verbatim as the rule's name. It matches no backend that exists, so it used to
+be reported as a backend that had stopped reporting, complete with a warning
+that the running and loaded configs disagreed. Nothing was wrong: the backend
+is chosen per request. It is now shown as exactly that, and no longer drags the
+service's health down.
+
 Nodes on the stats-page driver cannot serve configuration; the page says so
 rather than showing a bare `501`.
 
@@ -969,10 +978,10 @@ Deliberately out of scope for this version, in the order they make sense:
    visible while someone is looking; alerting is what covers the rest of the day.
 3. **Config editing** through the same transactions, now that the read-only
    [config viewer](#configuration-and-diff) exists.
-4. **Routing beyond `use_backend`.** The service view is built from
-   `default_backend` and backend switching rules. A backend selected by
-   `http-request set-backend`, or by a Lua action, appears under **Unrouted
-   backends** rather than in the service that actually reaches it.
+4. **Routing chosen by Lua.** The service view is built from
+   `default_backend` and backend switching rules, which covers the ways HAProxy
+   config selects a backend. A backend chosen by a Lua action is invisible to
+   both and appears under **Unrouted backends**.
 5. **Service grouping for the stats-page driver.** It cannot read configuration,
    so those nodes fall back to flat frontend and backend lists. A Runtime API
    socket driver would close this and remove the Data Plane API dependency.

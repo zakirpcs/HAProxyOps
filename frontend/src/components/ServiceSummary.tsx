@@ -43,7 +43,8 @@ export default function ServiceSummary({ node }: { node: NodeSnapshot }) {
     <div className="space-y-1.5">
       {services.map((service) => {
         const health = serviceHealth(service);
-        const targets = service.backends.length + service.missing.length;
+        const targets = service.backends.length + service.missing.length
+              + service.dynamic.length;
         return (
           <div key={service.key} className="rounded border border-ink-800 bg-ink-900/50 px-2 py-1.5">
             <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
@@ -83,6 +84,12 @@ export default function ServiceSummary({ node }: { node: NodeSnapshot }) {
                     : serversShownUnder.get(backend.name) ?? null
                 }
               />
+            ))}
+
+            {service.dynamic.map((expr) => (
+              <p key={expr} className="mt-1 ml-2 border-l border-ink-700 pl-2 text-[10px] text-[var(--color-mute)]">
+                <span className="font-mono">{expr}</span> picks a backend per request.
+              </p>
             ))}
 
             {service.missing.map((name) => (

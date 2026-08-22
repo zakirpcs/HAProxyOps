@@ -14,6 +14,24 @@ export interface Service {
   backends: BackendStat[];
   /** Routed to but absent from the stats: config and runtime disagree. */
   missing: string[];
+  /**
+   * Rule targets that are expressions rather than backend names, e.g.
+   * `use_backend %[req.hdr(x-tenant),lower]`. The backend is chosen per
+   * request, so no single one can be shown - but it is not missing either.
+   */
+  dynamic: string[];
+}
+
+/**
+ * Whether a rule target names a backend or computes one.
+ *
+ * HAProxy allows a fetch expression as a `use_backend` target, and the Data
+ * Plane API reports the expression verbatim as the rule's name. Treating that
+ * as a backend that failed to report would raise a false alarm about the
+ * config and the runtime disagreeing, when nothing is wrong at all.
+ */
+export function isDynamicTarget(name: string): boolean {
+  return name.includes("%") || name.includes("[") || name.includes("$");
 }
 
 export interface ServiceGrouping {
@@ -39,16 +57,19 @@ export function groupServices(node: NodeSnapshot): ServiceGrouping {
   const services: Service[] = node.frontends.map((frontend) => {
     const backends: BackendStat[] = [];
     const missing: string[] = [];
+    const dynamic: string[] = [];
     for (const name of frontend.routed_backends ?? []) {
       const backend = byName.get(name);
       if (backend) {
         backends.push(backend);
         useCount.set(name, (useCount.get(name) ?? 0) + 1);
+      } else if (isDynamicTarget(name)) {
+        dynamic.push(name);
       } else {
         missing.push(name);
       }
     }
-    return { key: frontend.name, frontend, backends, missing };
+    return { key: frontend.name, frontend, backends, missing, dynamic };
   });
 
   const shared = new Set(
@@ -66,10 +87,28 @@ export function groupServices(node: NodeSnapshot): ServiceGrouping {
 
 /** Worst status among a service's parts, for the section's own indicator. */
 export function serviceHealth(service: Service): "down" | "degraded" | "ok" {
-  const down = service.backends.some(
-    (b) => b.servers_total > 0 && b.servers_up === 0,
-  );
+  // Active servers only, matching the rule the fleet table uses for a node: a
+  // backup is meant to be down while the primaries are healthy. Counting it
+  // here made a service read "degraded" on a node the fleet showed as "UP" -
+  // the same fact, two answers.
+  // Falls back to the reported totals when the server list is absent: a
+  // transport that gives counts but no members should still be judged, not
+  // silently read as healthy.
+  const counts = (b: BackendStat): { up: number; total: number } => {
+    if (!b.servers?.length) return { up: b.servers_up, total: b.servers_total };
+    const active = b.servers.filter((s) => !s.backup);
+    return { up: active.filter((s) => s.is_up).length, total: active.length };
+  };
+
+  const down = service.backends.some((b) => {
+    const { up, total } = counts(b);
+    return total > 0 && up === 0;
+  });
   if (down || service.missing.length > 0) return "down";
-  const degraded = service.backends.some((b) => b.servers_up < b.servers_total);
+
+  const degraded = service.backends.some((b) => {
+    const { up, total } = counts(b);
+    return up < total;
+  });
   return degraded ? "degraded" : "ok";
 }
