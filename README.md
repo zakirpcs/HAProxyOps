@@ -528,6 +528,13 @@ Two comparisons are deliberately *not* reported as differences:
 Array order *is* compared, because rule order is behaviour in HAProxy — sorting
 rule lists before comparing would hide a reordering that changes routing.
 
+A frontend running a **Lua action** is called out where it matters. A Lua
+script can select a backend and the configuration never says which, so the
+**Unrouted backends** panel names any frontend running one: the difference
+between *nothing routes to this backend* and *we cannot see what routes to it*
+is the difference between a red flag and a shrug. The rule is read from the
+Data Plane API, which models Lua as a rule type with a named action.
+
 Dynamic targets are recognised rather than mistaken for faults. HAProxy allows
 a fetch expression as a `use_backend` target — `use_backend
 %[req.hdr(x-tenant),lower]` — and the Data Plane API reports that expression
@@ -1013,11 +1020,12 @@ Deliberately out of scope for this version, in the order they make sense:
    broken — see [Known transport differences](#known-transport-differences).
 2. **Alerting** on backend degradation. The fleet status indicator makes trouble
    visible while someone is looking; alerting is what covers the rest of the day.
-3. **Routing chosen by Lua.** The service view is built from
-   `default_backend` and backend switching rules, which covers the ways HAProxy
-   config selects a backend. A backend chosen by a Lua action is invisible to
-   both and appears under **Unrouted backends**.
-4. **Service grouping for the stats-page driver.** It cannot read configuration,
-   so those nodes fall back to flat frontend and backend lists. A Runtime API
-   socket driver would close this and remove the Data Plane API dependency.
-5. **SSO (OIDC)** instead of local accounts.
+3. **SSO (OIDC)** instead of local accounts.
+
+**Service grouping for the stats-page driver is not achievable**, and the
+earlier claim that a Runtime API socket driver would close it was wrong.
+Grouping needs routing, routing lives only in the configuration, and the
+Runtime API exposes state rather than config — its endpoints cover ACLs,
+servers, info, maps and stick tables, with nothing that says which frontend
+reaches which backend. Giving such a node a Data Plane API is the only route,
+which is why those nodes fall back to flat lists and say so.

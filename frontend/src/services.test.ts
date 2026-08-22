@@ -13,6 +13,7 @@ const fe = (name: string, def: string | null, rules: string[] = []): FrontendSta
   sessions_total: 0, bytes_in: 0, bytes_out: 0, request_errors: 0,
   requests_denied: 0, rate: 0, default_backend: def, rule_backends: rules,
   routed_backends: [...(def ? [def] : []), ...rules.filter((r) => r !== def)],
+  lua_actions: [],
 } as FrontendStat);
 
 const node = (
@@ -102,6 +103,21 @@ describe("dynamic rule targets", () => {
     "treats %s as a plain name", (name) => {
       expect(isDynamicTarget(name)).toBe(false);
     });
+});
+
+describe("Lua actions", () => {
+  it("names the frontends running one", () => {
+    const withLua = fe("api-in", "app");
+    (withLua as unknown as { lua_actions: string[] }).lua_actions = ["pick"];
+    const g = groupServices(node([withLua, fe("http-in", "app")], [be("app", 2, 2)]));
+    // The difference between "nothing routes here" and "we cannot see what does".
+    expect(g.luaFrontends).toEqual(["api-in"]);
+  });
+
+  it("is empty when no frontend runs Lua", () => {
+    const g = groupServices(node([fe("http-in", "app")], [be("app", 2, 2)]));
+    expect(g.luaFrontends).toEqual([]);
+  });
 });
 
 describe("serviceHealth", () => {

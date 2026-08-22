@@ -92,6 +92,10 @@ class FrontendStat:
     default_backend: str | None = None
     #: Backends reachable through ``use_backend`` rules, in config order.
     rule_backends: list[str] = field(default_factory=list)
+    #: Lua actions this frontend runs. A Lua script can select a backend, and
+    #: nothing in the configuration says which - so a frontend with one of
+    #: these may reach backends this view cannot show.
+    lua_actions: list[str] = field(default_factory=list)
 
     @property
     def routed_backends(self) -> list[str]:

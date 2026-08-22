@@ -66,9 +66,30 @@ async def test_routing_combines_default_and_use_backend():
     })
     routing = await driver._routing_map()
 
-    assert routing["stats"] == (None, [])
-    assert routing["http-in"] == ("app-back", [])
-    assert routing["api-in"] == ("app-back", ["health-back"])
+    assert routing["stats"] == (None, [], [])
+    assert routing["http-in"] == ("app-back", [], [])
+    assert routing["api-in"] == ("app-back", ["health-back"], [])
+
+
+@pytest.mark.asyncio
+async def test_a_lua_action_is_recorded_against_its_frontend():
+    """A Lua script can pick a backend and the config never says which.
+
+    Knowing one runs here is the difference between "nothing routes to this
+    backend" and "we cannot see what routes to it".
+    """
+    driver = build(**{
+        "/configuration/version": 7,
+        "/configuration/frontends": FRONTENDS,
+        "/configuration/frontends/api-in/http_request_rules": [
+            {"type": "lua", "lua_action": "pick_backend"},
+            {"type": "set-header", "hdr_name": "x"},
+        ],
+    })
+    routing = await driver._routing_map()
+
+    assert routing["api-in"][2] == ["pick_backend"]
+    assert routing["http-in"][2] == []
 
 
 @pytest.mark.asyncio
@@ -145,7 +166,7 @@ async def test_stale_routing_is_kept_when_a_refetch_fails():
         "/configuration/frontends": FRONTENDS,
     })
     good = await driver._routing_map()
-    assert good["http-in"] == ("app-back", [])
+    assert good["http-in"] == ("app-back", [], [])
 
     state["fail"] = True
     # A blip must not empty the map and make every backend look unrouted.
@@ -171,6 +192,6 @@ async def test_cache_survives_the_driver_being_rebuilt():
     second = build(**responses)
     routing = await second._routing_map()
 
-    assert routing["http-in"] == ("app-back", [])
+    assert routing["http-in"] == ("app-back", [], [])
     # Only the cheap version probe; the topology came from the cache.
     assert second.calls == ["/configuration/version"]

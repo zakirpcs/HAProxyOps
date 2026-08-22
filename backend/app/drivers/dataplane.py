@@ -129,15 +129,16 @@ class DataPlaneDriver:
         frontends, backends = _parse_native_stats(await self._request("GET", "/stats/native"))
         routing = await self._routing_map()
         for frontend in frontends:
-            default, rules = routing.get(frontend.name, (None, []))
+            default, rules, lua = routing.get(frontend.name, (None, [], []))
             frontend.default_backend = default
             frontend.rule_backends = rules
+            frontend.lua_actions = lua
         snapshot.frontends = frontends
         snapshot.backends = backends
         snapshot.reachable = True
         return snapshot
 
-    async def _routing_map(self) -> dict[str, tuple[str | None, list[str]]]:
+    async def _routing_map(self) -> dict[str, tuple[str | None, list[str], list[str]]]:
         """Frontend name -> (default_backend, use_backend targets).
 
         Never raises: routing is decoration on top of the stats, so a node that
@@ -169,33 +170,55 @@ class DataPlaneDriver:
             return f"ttl:{int(time.monotonic() / CONFIG_TTL_SECONDS)}"
         return f"v:{version}"
 
+    def _http_rules_path(self, frontend: str) -> str:
+        """v3 nests http_request_rules under the frontend; v2 is flat."""
+        if self.prefix == "/v3":
+            return f"/configuration/frontends/{frontend}/http_request_rules"
+        return "/configuration/http_request_rules"
+
     def _switching_rules_path(self, frontend: str) -> tuple[str, dict]:
         """v3 nests the rules under the frontend; v2 takes it as a query."""
         if self.prefix == "/v3":
             return f"/configuration/frontends/{frontend}/backend_switching_rules", {}
         return "/configuration/backend_switching_rules", {"frontend": frontend}
 
-    async def _fetch_routing(self) -> dict[str, tuple[str | None, list[str]]]:
+    async def _fetch_routing(self) -> dict[str, tuple[str | None, list[str], list[str]]]:
         raw = _unwrap(await self._request("GET", "/configuration/frontends")) or []
         # Filter first and keep one list: rule lookups are zipped back against
         # these entries, so the two must not drift apart.
         frontends = [f for f in raw if isinstance(f, dict) and f.get("name")]
 
-        async def rules_for(name: str) -> list[str]:
+        async def rules_for(name: str) -> tuple[list[str], list[str]]:
             path, params = self._switching_rules_path(name)
             try:
                 rules = _unwrap(await self._request("GET", path, params=params)) or []
             except (DriverError, UnsupportedOperation):
                 # One frontend's rules failing must not lose the whole map.
-                return []
-            return [r["name"] for r in rules if isinstance(r, dict) and r.get("name")]
+                rules = []
+            backends = [r["name"] for r in rules if isinstance(r, dict) and r.get("name")]
+
+            # A Lua action can pick a backend, and the configuration never says
+            # which. Knowing one runs here is the difference between "nothing
+            # routes to this backend" and "we cannot see what routes to it".
+            try:
+                http_rules = _unwrap(
+                    await self._request("GET", self._http_rules_path(name))
+                ) or []
+            except (DriverError, UnsupportedOperation):
+                http_rules = []
+            lua = [
+                str(r.get("lua_action") or "lua")
+                for r in http_rules
+                if isinstance(r, dict) and r.get("type") == "lua"
+            ]
+            return backends, lua
 
         # Concurrent: this is one request per frontend, and a busy edge node can
         # easily have dozens.
         rule_lists = await asyncio.gather(*(rules_for(f["name"]) for f in frontends))
         return {
-            f["name"]: (f.get("default_backend") or None, rules)
-            for f, rules in zip(frontends, rule_lists, strict=True)
+            f["name"]: (f.get("default_backend") or None, backends, lua)
+            for f, (backends, lua) in zip(frontends, rule_lists, strict=True)
         }
 
     async def fetch_raw_config(self) -> tuple[str, str]:

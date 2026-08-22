@@ -274,9 +274,20 @@ export default function NodeDetail() {
           {visibleOrphans.length > 0 && (
             <Panel title={`Unrouted backends (${visibleOrphans.length})`}>
               <p className="mb-2 text-xs text-[var(--color-mute)]">
-                No frontend on this node routes to these. That is normal for a backend
-                reached only by an ACL this view does not model, and a red flag for one
-                that is simply orphaned.
+                No frontend on this node routes to these, as far as the configuration
+                shows. That is normal for a backend reached another way, and a red flag
+                for one that is simply orphaned.
+                {grouping.luaFrontends.length > 0 && (
+                  <>
+                    {" "}
+                    <span className="text-[var(--color-drain)]">
+                      {grouping.luaFrontends.join(", ")} run{" "}
+                      {grouping.luaFrontends.length === 1 ? "a Lua action" : "Lua actions"},
+                      which can select a backend without the configuration saying which —
+                      so some of these may be routed after all.
+                    </span>
+                  </>
+                )}
               </p>
               <div className="space-y-2">
                 {visibleOrphans.map((backend) => (

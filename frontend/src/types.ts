@@ -58,6 +58,8 @@ export interface FrontendStat {
   rule_backends: string[];
   /** default_backend followed by rule targets, deduplicated. */
   routed_backends: string[];
+  /** Lua actions this frontend runs; any of them may select a backend. */
+  lua_actions: string[];
 }
 
 export interface NodeSnapshot {

@@ -41,6 +41,12 @@ export interface ServiceGrouping {
   /** Backends reachable from more than one frontend. */
   shared: Set<string>;
   /**
+   * Frontends running a Lua action. A Lua script can select a backend and the
+   * configuration never says which, so an unrouted backend on such a node may
+   * be perfectly well routed - just not visibly.
+   */
+  luaFrontends: string[];
+  /**
    * True when the node's transport cannot read configuration, so there is no
    * routing to group by. Distinguished from "config read fine, and nothing is
    * routed" because the two need different explanations in the UI.
@@ -81,6 +87,9 @@ export function groupServices(node: NodeSnapshot): ServiceGrouping {
     services,
     orphans,
     shared,
+    luaFrontends: node.frontends
+      .filter((f) => (f.lua_actions ?? []).length > 0)
+      .map((f) => f.name),
     unavailable: !(node.capabilities ?? []).includes("read_config"),
   };
 }
