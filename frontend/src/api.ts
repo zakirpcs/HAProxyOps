@@ -1,3 +1,4 @@
+import type { NodeConfig } from "./configdiff";
 import type {
   AlertsResponse, AppUser, AuditEntry, FleetSummary, ManagedNode, NodeSnapshot,
   Role, SearchHit,
@@ -52,7 +53,7 @@ export const api = {
 
   fleet: () => request<{ nodes: NodeSnapshot[]; summary: FleetSummary }>("/fleet"),
   nodeState: (id: number) => request<NodeSnapshot>(`/nodes/${id}/state`),
-  nodeConfig: (id: number) => request<Record<string, unknown>>(`/nodes/${id}/config`),
+  nodeConfig: (id: number) => request<NodeConfig>(`/nodes/${id}/config`),
 
   listNodes: () => request<ManagedNode[]>("/nodes"),
   createNode: (body: Record<string, unknown>) =>

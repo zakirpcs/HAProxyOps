@@ -465,6 +465,33 @@ than blanking the page. Selecting an unreachable node still renders its graphs,
 with a warning: Prometheus keeps its own history, so the last datapoint would
 otherwise read as the node's current state.
 
+### Configuration and diff
+
+`/config` shows a node's declared frontends and backends, and can diff two
+nodes side by side. It answers *why does lb-edge-2 behave differently from
+lb-edge-1* — otherwise unanswerable from the dashboard, which shows what each
+node is **doing** but never what it was **told**.
+
+Read-only, and matched by proxy name: "the same backend on both nodes" means
+the same name, since file order is meaningless across hosts. Differences and
+one-sided proxies sort above identical ones, which are collapsed to a single
+line — you did not open the page for the parts that match.
+
+Two comparisons are deliberately *not* reported as differences:
+
+- **Null versus absent.** In HAProxy an unset option and one the API reports as
+  `null` mean the same thing, so treating them as different invents a
+  difference that does not exist.
+- **The `from` field**, which names the anonymous defaults section a proxy
+  inherits. The Data Plane API numbers those per file, so two identical configs
+  routinely disagree on it.
+
+Array order *is* compared, because rule order is behaviour in HAProxy — sorting
+rule lists before comparing would hide a reordering that changes routing.
+
+Nodes on the stats-page driver cannot serve configuration; the page says so
+rather than showing a bare `501`.
+
 ### Service view
 
 The node page groups each frontend with the backends it routes to, read from
@@ -879,11 +906,15 @@ Deliberately out of scope for this version, in the order they make sense:
    broken — see [Known transport differences](#known-transport-differences).
 2. **Alerting** on backend degradation. The fleet status indicator makes trouble
    visible while someone is looking; alerting is what covers the rest of the day.
-3. **Routing beyond `use_backend`.** The service view is built from
+3. **Config editing** through the same transactions, now that the read-only
+   [config viewer](#configuration-and-diff) exists. Blocked on Alembic: it is
+   the first feature that will want a schema change that is not a nullable
+   column.
+4. **Routing beyond `use_backend`.** The service view is built from
    `default_backend` and backend switching rules. A backend selected by
    `http-request set-backend`, or by a Lua action, appears under **Unrouted
    backends** rather than in the service that actually reaches it.
-4. **Service grouping for the stats-page driver.** It cannot read configuration,
+5. **Service grouping for the stats-page driver.** It cannot read configuration,
    so those nodes fall back to flat frontend and backend lists. A Runtime API
    socket driver would close this and remove the Data Plane API dependency.
-5. **SSO (OIDC)** instead of local accounts.
+6. **SSO (OIDC)** instead of local accounts.
