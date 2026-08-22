@@ -79,6 +79,19 @@ class StatsCsvDriver:
             "to enable runtime actions."
         )
 
+    async def fetch_raw_config(self) -> tuple[str, str]:
+        raise UnsupportedOperation(
+            "the stats page exposes runtime state only, never the configuration"
+        )
+
+    async def push_raw_config(
+        self, config: str, version: str, *, validate_only: bool
+    ) -> None:
+        raise UnsupportedOperation(
+            "the stats page is read-only; register the node with the Data Plane "
+            "API driver to change its configuration"
+        )
+
 
 def _parse_csv(text: str) -> tuple[list, list[BackendStat]]:
     lines = text.splitlines()

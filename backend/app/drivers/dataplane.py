@@ -221,6 +221,12 @@ class DataPlaneDriver:
             for f, (backends, lua) in zip(frontends, rule_lists, strict=True)
         }
 
+    async def fetch_config(self) -> dict[str, Any]:
+        """Read-only config view: declared frontends and backends."""
+        frontends = await self._request("GET", "/configuration/frontends")
+        backends = await self._request("GET", "/configuration/backends")
+        return {"frontends": _unwrap(frontends), "backends": _unwrap(backends)}
+
     async def fetch_raw_config(self) -> tuple[str, str]:
         """The configuration file as text, with the version that produced it.
 
