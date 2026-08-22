@@ -9,6 +9,10 @@ RUN pip install --no-cache-dir . && \
     chown -R 1001:0 /app && chmod -R g=u /app
 
 COPY app ./app
+# Migrations are runtime data, not build tooling: the app applies them at
+# startup, so the image is broken without them.
+COPY alembic.ini ./
+COPY migrations ./migrations
 
 USER 1001
 EXPOSE 8000

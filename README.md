@@ -886,11 +886,36 @@ Hand-rolled SVG — no charting dependency. Worth knowing about the choices:
 
 ### Schema changes
 
-`init_models()` adds nullable columns that exist on the models but not yet in
-the database (`prometheus_instance` arrived this way). It is a stopgap, not a
-migration system: it skips anything it cannot apply safely and logs a warning.
-**Introduce Alembic before the first change that is not a nullable column
-addition** — renames, drops and type changes are all silently ignored.
+Alembic, applied automatically at startup. `init_models()` upgrades the
+database to head; there is no `create_all` path any more.
+
+```bash
+cd backend
+.venv/bin/alembic revision --autogenerate -m "what changed"
+.venv/bin/alembic upgrade head        # or just restart the API
+.venv/bin/alembic upgrade head --sql  # emit SQL for review instead
+```
+
+The URL comes from the application's settings, not `alembic.ini`. In production
+it contains the Postgres password and is read from a mounted secret;
+duplicating it into a config file would put a credential back in the repo.
+
+**A database created before migrations existed is adopted, not rebuilt.** It has
+every table but no `alembic_version`, so running the baseline against it would
+fail on "table already exists". Startup detects that, stamps the baseline as
+already satisfied, and applies anything newer. Verified against a live Postgres
+with four registered nodes and sixteen audit rows: adopted once, data intact,
+and the stamp holds across restarts.
+
+Auto-applying at startup suits a single API container behind nginx — an
+operator upgrading the image should not also have to remember a manual step.
+**Run several replicas and this has to move to a job that runs once before they
+start**, because two of them migrating simultaneously is a race.
+
+`compare_type` and `compare_server_default` are on, so a column changing type or
+nullability is detected; without them, half the point of migrations is lost.
+SQLite uses batch mode, since it cannot `ALTER` most things in place — the same
+migration then works on a developer's SQLite and on production Postgres.
 
 ---
 
@@ -920,9 +945,6 @@ deploy/
 
 Things already load-bearing that will need work before they bite:
 
-- **Alembic.** `init_models()` only adds nullable columns; see
-  [Schema changes](#schema-changes). This is the first item that turns into an
-  outage rather than an inconvenience.
 - **The modal shim.** jsdom implements `<dialog>` as an element but not its
   modal behaviour, so `src/test/setup.ts` supplies `showModal`/`close` and the
   `close` event. Tests therefore cover the flow around a dialog — what opens it,
@@ -946,9 +968,7 @@ Deliberately out of scope for this version, in the order they make sense:
 2. **Alerting** on backend degradation. The fleet status indicator makes trouble
    visible while someone is looking; alerting is what covers the rest of the day.
 3. **Config editing** through the same transactions, now that the read-only
-   [config viewer](#configuration-and-diff) exists. Blocked on Alembic: it is
-   the first feature that will want a schema change that is not a nullable
-   column.
+   [config viewer](#configuration-and-diff) exists.
 4. **Routing beyond `use_backend`.** The service view is built from
    `default_backend` and backend switching rules. A backend selected by
    `http-request set-backend`, or by a Lua action, appears under **Unrouted
