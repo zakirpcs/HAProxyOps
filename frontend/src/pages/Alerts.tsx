@@ -1,8 +1,12 @@
-import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { api } from "../api";
 import { Panel, StatusDot, humanDuration } from "../components/ui";
 import type { CurrentAlert } from "../types";
+
+const FIELD =
+  "w-full rounded border border-ink-600 bg-ink-800 px-3 py-2 text-sm outline-none focus:border-[var(--color-accent)]";
 
 /**
  * What is wrong right now.
@@ -22,6 +26,10 @@ export default function Alerts() {
     // The poller re-evaluates on its own cadence; this just needs to keep up.
     refetchInterval: 15_000,
   });
+  // Not for access control - the endpoint below is admin-gated server-side
+  // regardless. This only decides whether to show the panel at all, the same
+  // way the nav bar hides Audit/Users from non-admins.
+  const me = useQuery({ queryKey: ["me"], queryFn: api.me });
 
   const alerts = query.data?.alerts ?? [];
   const critical = alerts.filter((a) => a.severity === "critical").length;
@@ -43,11 +51,12 @@ export default function Alerts() {
         // health and the difference has to be obvious.
         <p className="rounded border border-[var(--color-drain)]/40 bg-[var(--color-drain)]/10 px-3 py-1.5 text-xs text-[var(--color-drain)]">
           No webhook configured, so nothing is being sent anywhere. This page shows
-          what alerting <em>would</em> deliver — set{" "}
-          <code className="text-slate-300">HAPROXYOPS_ALERT_WEBHOOK_URL</code> to turn
-          delivery on.
+          what alerting <em>would</em> deliver — set one below (admins) or via{" "}
+          <code className="text-slate-300">HAPROXYOPS_ALERT_WEBHOOK_URL</code>.
         </p>
       )}
+
+      {me.data?.role === "admin" && <WebhookSettings />}
 
       {query.isError && (
         <p className="rounded border border-[var(--color-down)]/40 bg-[var(--color-down)]/10 px-3 py-1.5 text-xs text-[var(--color-down)]">
@@ -152,5 +161,95 @@ function AlertRow({ alert }: { alert: CurrentAlert }) {
         )}
       </td>
     </tr>
+  );
+}
+
+/**
+ * Admin-only. Sets the webhook `alerting.run` delivers to, without a
+ * redeploy - previously the only way to change it was
+ * HAPROXYOPS_ALERT_WEBHOOK_URL, which still works and still wins if nothing
+ * is set here.
+ *
+ * The URL itself is never shown once saved, the same way a node's stored
+ * password never is: a webhook URL routinely embeds a bearer secret in its
+ * path (Slack and Discord incoming webhooks both do), so round-tripping it
+ * back to the browser would be handing out a working credential to view.
+ */
+function WebhookSettings() {
+  const queryClient = useQueryClient();
+  const status = useQuery({ queryKey: ["alert-webhook"], queryFn: api.alertWebhook.get });
+  const [url, setUrl] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  function onSettled() {
+    queryClient.invalidateQueries({ queryKey: ["alert-webhook"] });
+    queryClient.invalidateQueries({ queryKey: ["alerts"] });
+  }
+
+  const save = useMutation({
+    mutationFn: () => api.alertWebhook.set(url.trim()),
+    onSuccess: () => {
+      onSettled();
+      setUrl("");
+      setError(null);
+    },
+    onError: (e) => setError(e instanceof Error ? e.message : "Could not save the webhook"),
+  });
+
+  const clear = useMutation({
+    mutationFn: () => api.alertWebhook.clear(),
+    onSuccess: () => {
+      onSettled();
+      setError(null);
+    },
+    onError: (e) => setError(e instanceof Error ? e.message : "Could not clear the webhook"),
+  });
+
+  const source = status.data?.source;
+  const statusText =
+    source === "ui" ? "Configured from this page."
+      : source === "env" ? "Configured via HAPROXYOPS_ALERT_WEBHOOK_URL, not from here."
+        : status.isLoading ? "Checking…"
+          : "Not configured - nothing is being delivered.";
+
+  return (
+    <Panel title="Delivery">
+      <p className="mb-2 text-xs text-[var(--color-mute)]">{statusText}</p>
+      <form
+        className="flex flex-wrap items-center gap-2"
+        onSubmit={(e) => { e.preventDefault(); if (url.trim()) save.mutate(); }}
+      >
+        <input
+          className={`${FIELD} max-w-md`}
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          placeholder="https://hooks.example.com/…"
+          aria-label="Webhook URL"
+        />
+        <button
+          type="submit" disabled={!url.trim() || save.isPending}
+          className="rounded bg-[var(--color-accent)] px-3 py-2 text-xs font-medium text-black disabled:opacity-40"
+        >
+          {save.isPending ? "Saving…" : "Save"}
+        </button>
+        <button
+          type="button"
+          // Nothing to clear when the value in effect isn't the one stored
+          // here - clearing the env var is not this button's job.
+          disabled={source !== "ui" || clear.isPending}
+          onClick={() => clear.mutate()}
+          title={source !== "ui" ? "Nothing set from this page to clear" : undefined}
+          className="rounded border border-ink-600 px-3 py-2 text-xs text-[var(--color-mute)] transition hover:text-slate-200 disabled:opacity-40"
+        >
+          {clear.isPending ? "Clearing…" : "Clear"}
+        </button>
+      </form>
+      {error && (
+        <p className="mt-2 text-xs text-[var(--color-down)]">{error}</p>
+      )}
+      <p className="mt-2 text-[11px] text-[var(--color-mute)]">
+        Not shown once saved - a webhook URL routinely embeds a bearer secret in its path.
+      </p>
+    </Panel>
   );
 }

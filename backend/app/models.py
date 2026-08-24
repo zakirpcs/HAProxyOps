@@ -84,6 +84,25 @@ class Node(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
+class AppSettings(Base):
+    """Runtime settings editable from the UI, kept as a single row.
+
+    A dedicated table rather than a generic key/value store: a generic store
+    is exactly the kind of abstraction to avoid building before there is a
+    second setting that needs it. The row always has id=1 - see
+    settings_store.py.
+    """
+
+    __tablename__ = "app_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    #: Fernet-encrypted at rest, like Node.password_encrypted - a webhook URL
+    #: routinely embeds a bearer secret (Slack/Discord incoming webhooks put
+    #: the token in the path). Null means "not set here"; alerting then falls
+    #: back to HAPROXYOPS_ALERT_WEBHOOK_URL if that env var is set.
+    alert_webhook_url_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class AuditLog(Base):
     """Append-only record of every mutating action."""
 

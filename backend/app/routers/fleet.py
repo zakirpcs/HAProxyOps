@@ -4,7 +4,7 @@ import time
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from sqlalchemy import select
 
-from .. import alerting
+from .. import alerting, settings_store
 from ..config import get_settings
 from ..deps import CurrentUser, RequireAdmin, SessionDep, write_audit
 from ..drivers import build_driver
@@ -250,7 +250,7 @@ async def search(
 
 
 @router.get("/alerts")
-async def alerts(_: CurrentUser) -> dict:
+async def alerts(_: CurrentUser, session: SessionDep) -> dict:
     """What is wrong right now, and what has been announced.
 
     Evaluated on demand from the cached snapshots, so the page works whether or
@@ -258,6 +258,7 @@ async def alerts(_: CurrentUser) -> dict:
     way, and it doubles as a preview of what alerting *would* send once one is
     set. Delivery is the only part that needs the webhook.
     """
+    delivery_configured, _source = await settings_store.alert_webhook_status(session)
     known = await alerting.load_state()
     now = time.time()
 
@@ -283,7 +284,7 @@ async def alerts(_: CurrentUser) -> dict:
     order = {"critical": 0, "warning": 1}
     items.sort(key=lambda a: (order.get(a["severity"], 9), -a["for_seconds"]))
     return {
-        "delivery_configured": bool(settings.alert_webhook_url),
+        "delivery_configured": delivery_configured,
         "for_seconds": settings.alert_for_seconds,
         "count": len(items),
         "alerts": items,

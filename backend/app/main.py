@@ -13,6 +13,7 @@ from .logging_filters import install as install_log_redaction
 from .models import Role, User
 from .poller import poll_loop
 from .routers import actions, auth, events, fleet, metrics, nodes
+from .routers import settings as settings_router
 from .security import hash_password
 from .state import close_redis, get_redis
 
@@ -75,7 +76,7 @@ app.add_middleware(
 )
 
 for router in (auth.router, nodes.router, fleet.router, actions.router,
-               events.router, metrics.router):
+               events.router, metrics.router, settings_router.router):
     app.include_router(router)
 
 

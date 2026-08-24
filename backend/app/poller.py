@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import select
 
-from . import alerting, maintenance
+from . import alerting, maintenance, settings_store
 from .config import get_settings
 from .db import SessionLocal
 from .drivers import build_driver
@@ -67,7 +67,9 @@ async def poll_once() -> int:
     # After storing, so the dashboard is never waiting on a webhook, and
     # guarded so a broken receiver cannot stop the fleet being polled.
     try:
-        await alerting.run(as_dicts)
+        async with SessionLocal() as session:
+            webhook_url = await settings_store.effective_alert_webhook_url(session)
+        await alerting.run(as_dicts, webhook_url)
     except Exception:
         log.exception("alert evaluation failed")
 

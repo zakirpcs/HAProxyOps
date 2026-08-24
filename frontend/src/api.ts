@@ -1,7 +1,7 @@
 import type { NodeConfig } from "./configdiff";
 import type {
-  AlertsResponse, AppUser, AuditEntry, FleetSummary, ManagedNode, NodeSnapshot,
-  Role, SearchHit,
+  AlertsResponse, AlertWebhookStatus, AppUser, AuditEntry, FleetSummary, ManagedNode,
+  NodeSnapshot, Role, SearchHit,
 } from "./types";
 
 const TOKEN_KEY = "haproxyops.token";
@@ -96,6 +96,19 @@ export const api = {
   logout: () => request<void>("/auth/logout", { method: "POST" }),
 
   alerts: () => request<AlertsResponse>("/alerts"),
+  alertWebhook: {
+    get: () => request<AlertWebhookStatus>("/settings/alert-webhook"),
+    // The URL is never read back, only whether something is set and where
+    // from - see AlertWebhookStatus. Save always means "replace with this".
+    set: (webhook_url: string) =>
+      request<AlertWebhookStatus>("/settings/alert-webhook", {
+        method: "PUT", body: JSON.stringify({ webhook_url }),
+      }),
+    clear: () =>
+      request<AlertWebhookStatus>("/settings/alert-webhook", {
+        method: "PUT", body: JSON.stringify({ clear: true }),
+      }),
+  },
 
   audit: (limit = 200) => request<AuditEntry[]>(`/audit?limit=${limit}`),
 

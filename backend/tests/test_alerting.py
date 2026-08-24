@@ -1,6 +1,8 @@
 """Alert rules, and the part that keeps them from becoming noise."""
 
-from app.alerting import Alert, decide, evaluate, payload_for
+import pytest
+
+from app.alerting import Alert, decide, deliver, evaluate, payload_for, run
 
 
 def server(name, up, backup=False):
@@ -144,3 +146,25 @@ def test_the_payload_carries_what_a_receiver_needs():
     assert body["key"] == "k"
     assert body["source"] == "haproxyops"
     assert body["at"].endswith("Z")
+
+
+# --- webhook_url is the caller's job, not this module's ---------------------
+# settings_store resolves the UI-set value or the env var; alerting.run and
+# .deliver just take whatever they are handed and do not care which it was.
+
+@pytest.mark.asyncio
+async def test_run_does_nothing_without_a_webhook():
+    decision = await run([], webhook_url=None)
+    assert decision.firing == [] and decision.resolved == []
+
+
+@pytest.mark.asyncio
+async def test_deliver_skips_the_network_without_a_webhook():
+    sent = await deliver([payload_for(ALERT, "firing")], webhook_url=None)
+    assert sent == 0
+
+
+@pytest.mark.asyncio
+async def test_deliver_skips_the_network_with_nothing_to_send():
+    sent = await deliver([], webhook_url="https://hooks.example.com/x")
+    assert sent == 0

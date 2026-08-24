@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -147,6 +148,29 @@ class HoldOut(BaseModel):
 
 class WeightRequest(BaseModel):
     weight: int = Field(ge=0, le=256)
+
+
+class AlertWebhookStatus(BaseModel):
+    configured: bool
+    #: "ui" (set here), "env" (HAPROXYOPS_ALERT_WEBHOOK_URL only), or "none".
+    #: Never the URL itself - like a node password, it is write-only once
+    #: saved, since a webhook URL routinely embeds a bearer secret.
+    source: Literal["ui", "env", "none"]
+
+
+class AlertWebhookUpdate(BaseModel):
+    #: Ignored when clear is true. Required otherwise - PUT always expresses
+    #: one clear intent, never "leave it alone" (there is nothing to edit
+    #: blindly, unlike a node form pre-filled with other fields).
+    webhook_url: str | None = None
+    clear: bool = False
+
+    @field_validator("webhook_url")
+    @classmethod
+    def _require_http(cls, value: str | None) -> str | None:
+        if value and not value.startswith(("http://", "https://")):
+            raise ValueError("webhook_url must start with http:// or https://")
+        return value
 
 
 class AuditOut(BaseModel):

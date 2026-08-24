@@ -208,14 +208,14 @@ def payload_for(alert: Alert, status: str) -> dict:
     }
 
 
-async def deliver(payloads: list[dict]) -> int:
-    """POST each payload to the configured webhook. Returns how many landed.
+async def deliver(payloads: list[dict], webhook_url: str | None) -> int:
+    """POST each payload to the given webhook. Returns how many landed.
 
     Never raises: an alerting failure must not break the poll loop that feeds
     the dashboard. A webhook being down is worth a log line, not an outage of
     the thing people use to see the outage.
     """
-    url = settings.alert_webhook_url
+    url = webhook_url
     if not url or not payloads:
         return 0
 
@@ -239,9 +239,14 @@ async def deliver(payloads: list[dict]) -> int:
     return sent
 
 
-async def run(snapshots: list[dict]) -> Decision:
-    """One alerting cycle: evaluate, decide, deliver, remember."""
-    if not settings.alert_webhook_url:
+async def run(snapshots: list[dict], webhook_url: str | None) -> Decision:
+    """One alerting cycle: evaluate, decide, deliver, remember.
+
+    webhook_url is resolved by the caller (settings_store.effective_alert_webhook_url) -
+    it may come from the UI-editable setting or the HAPROXYOPS_ALERT_WEBHOOK_URL
+    env var, and this module does not need to know which.
+    """
+    if not webhook_url:
         return Decision()
 
     known = await load_state()
@@ -263,7 +268,7 @@ async def run(snapshots: list[dict]) -> Decision:
         })
 
     if payloads:
-        sent = await deliver(payloads)
+        sent = await deliver(payloads, webhook_url)
         log.info(
             "alerts: %d firing, %d resolved, %d delivered",
             len(decision.firing), len(decision.resolved), sent,

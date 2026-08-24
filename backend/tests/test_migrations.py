@@ -33,12 +33,26 @@ def test_a_fresh_database_is_built_by_migrations(engine):
 
 
 def test_it_is_stamped_at_head_afterwards(engine):
+    """A fresh database ends up at the real head, not stuck on the baseline -
+    this only happened to be the same revision while there was just one."""
     eng, path = engine
     with eng.begin() as conn:
         _upgrade(conn)
 
+    from alembic.script import ScriptDirectory
+
+    from app.db import _alembic_config
+
+    head = ScriptDirectory.from_config(_alembic_config()).get_current_head()
     version = sqlite3.connect(path).execute("select version_num from alembic_version").fetchone()
-    assert version[0] == BASELINE_REVISION
+    assert version[0] == head
+
+
+#: What create_all actually produced before migrations existed - not
+#: "whatever Base.metadata has today", which grows with every later model and
+#: would silently stop this test from representing a pre-migration database at
+#: all the day a table like app_settings is added.
+_PRE_MIGRATION_TABLES = {"users", "nodes", "audit_log", "maintenance_holds"}
 
 
 def test_a_database_from_before_migrations_is_adopted_not_rebuilt(engine):
@@ -49,9 +63,15 @@ def test_a_database_from_before_migrations_is_adopted_not_rebuilt(engine):
     "table already exists".
     """
     eng, path = engine
+    from sqlalchemy import MetaData
+
     from app.db import Base
 
-    Base.metadata.create_all(eng)
+    frozen = MetaData()
+    for name, table in Base.metadata.tables.items():
+        if name in _PRE_MIGRATION_TABLES:
+            table.to_metadata(frozen)
+    frozen.create_all(eng)
     with eng.begin() as conn:
         conn.exec_driver_sql(
             "insert into users (username, password_hash, role, is_active, created_at) "

@@ -162,3 +162,9 @@ export interface AlertsResponse {
   count: number;
   alerts: CurrentAlert[];
 }
+
+export interface AlertWebhookStatus {
+  configured: boolean;
+  /** "ui": set from this page. "env": HAPROXYOPS_ALERT_WEBHOOK_URL only. */
+  source: "ui" | "env" | "none";
+}

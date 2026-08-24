@@ -1,5 +1,6 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import Alerts from "./Alerts";
 import { renderWithProviders } from "../test/render";
 import { installEventSource } from "../test/sse";
@@ -16,6 +17,21 @@ function installApi(body: Record<string, unknown>) {
     ok: true, status: 200,
     json: async () => ({ delivery_configured: true, for_seconds: 60, count: 0, alerts: [], ...body }),
   })));
+}
+
+/**
+ * Routes on the URL rather than one flat body - the webhook panel fires its
+ * own requests (/auth/me, /settings/alert-webhook) alongside /alerts, and
+ * those need independently shaped responses.
+ */
+function installRoutedApi(routes: Record<string, () => unknown>) {
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+    const path = url.replace(/^\/api/, "");
+    const key = init?.method && init.method !== "GET" ? `${init.method} ${path}` : path;
+    const body = routes[key] ?? routes[path];
+    if (!body) throw new Error(`unexpected fetch: ${key}`);
+    return { ok: true, status: 200, json: async () => body() };
+  }));
 }
 
 describe("Alerts page", () => {
@@ -91,5 +107,81 @@ describe("Alerts page", () => {
     await screen.findByText(/has no active servers/);
     const text = document.body.textContent ?? "";
     expect(text.indexOf("no active servers")).toBeLessThan(text.indexOf("is degraded"));
+  });
+});
+
+describe("Alerts page > webhook settings", () => {
+  beforeEach(() => {
+    installEventSource();
+    localStorage.setItem("haproxyops.token", "t");
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("is hidden from a non-admin", async () => {
+    installRoutedApi({
+      "/alerts": () => ({ delivery_configured: false, for_seconds: 60, count: 0, alerts: [] }),
+      "/auth/me": () => ({ username: "op", role: "operator" }),
+    });
+    renderWithProviders(<Alerts />, { route: "/alerts" });
+    await screen.findByText(/Nothing is firing/);
+    expect(screen.queryByText("Delivery")).not.toBeInTheDocument();
+  });
+
+  it("shows an admin where the webhook currently comes from", async () => {
+    installRoutedApi({
+      "/alerts": () => ({ delivery_configured: true, for_seconds: 60, count: 0, alerts: [] }),
+      "/auth/me": () => ({ username: "admin", role: "admin" }),
+      "/settings/alert-webhook": () => ({ configured: true, source: "env" }),
+    });
+    renderWithProviders(<Alerts />, { route: "/alerts" });
+    expect(await screen.findByText("Delivery")).toBeInTheDocument();
+    expect(await screen.findByText(/HAPROXYOPS_ALERT_WEBHOOK_URL/)).toBeInTheDocument();
+    // Nothing to clear when the effective value isn't the one stored here.
+    expect(screen.getByRole("button", { name: "Clear" })).toBeDisabled();
+  });
+
+  it("lets an admin set a webhook, and never shows the value back", async () => {
+    const user = userEvent.setup();
+    let configured = false;
+    installRoutedApi({
+      "/alerts": () => ({ delivery_configured: configured, for_seconds: 60, count: 0, alerts: [] }),
+      "/auth/me": () => ({ username: "admin", role: "admin" }),
+      "/settings/alert-webhook": () => ({ configured, source: configured ? "ui" : "none" }),
+      "PUT /settings/alert-webhook": () => {
+        configured = true;
+        return { configured: true, source: "ui" };
+      },
+    });
+    renderWithProviders(<Alerts />, { route: "/alerts" });
+    await screen.findByText(/Not configured/);
+
+    await user.type(screen.getByLabelText("Webhook URL"), "https://hooks.example.com/x");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(screen.getByText(/Configured from this page/)).toBeInTheDocument());
+    // Write-only: the field clears rather than continuing to show what was typed.
+    expect(screen.getByLabelText("Webhook URL")).toHaveValue("");
+    expect(screen.queryByText("https://hooks.example.com/x")).not.toBeInTheDocument();
+  });
+
+  it("lets an admin clear a webhook set from this page", async () => {
+    const user = userEvent.setup();
+    let configured = true;
+    installRoutedApi({
+      "/alerts": () => ({ delivery_configured: configured, for_seconds: 60, count: 0, alerts: [] }),
+      "/auth/me": () => ({ username: "admin", role: "admin" }),
+      "/settings/alert-webhook": () => ({ configured, source: configured ? "ui" : "none" }),
+      "PUT /settings/alert-webhook": () => {
+        configured = false;
+        return { configured: false, source: "none" };
+      },
+    });
+    renderWithProviders(<Alerts />, { route: "/alerts" });
+    await screen.findByText(/Configured from this page/);
+    const clearButton = screen.getByRole("button", { name: "Clear" });
+    await waitFor(() => expect(clearButton).toBeEnabled());
+
+    await user.click(clearButton);
+    await waitFor(() => expect(screen.getByText(/Not configured/)).toBeInTheDocument());
   });
 });
