@@ -488,11 +488,11 @@ function NodeModal({
         <Section title="Metrics" optional>
           <Labeled
             label="Prometheus instance"
-            hint="Leave blank to match any port on the base URL's host. Set it when the scrape target differs."
+            hint="Leave blank - this is correct for almost every node. It matches any series whose instance label starts with the host from the address above, which is what both HAProxyOps' own built-in exporter and a node's native Prometheus exporter produce. Set it only if Prometheus's own instance label uses a different host than that address (e.g. a DNS name here, an IP there)."
           >
             <input className={FIELD} value={form.prometheus_instance}
                    onChange={(e) => set("prometheus_instance", e.target.value)}
-                   placeholder="lb1.dc1.example.com:8404" />
+                   placeholder="only needed if it differs from Base URL's host" />
           </Labeled>
         </Section>
         </div>
