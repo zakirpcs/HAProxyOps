@@ -155,9 +155,15 @@ export function FleetProvider({ children }: { children: ReactNode }) {
   }, [commit]);
 
   const value = useMemo<FleetState>(() => {
-    const list = [...visible.values()].sort(
-      (a, b) => a.group.localeCompare(b.group) || a.node_name.localeCompare(b.node_name),
-    );
+    // A node with no cached snapshot yet (just added, poller hasn't run) comes
+    // back "pending" with no frontends/backends at all - fill in defaults here
+    // rather than at every call site, so a fleet mid-onboarding never crashes
+    // the render tree for every open dashboard.
+    const list = [...visible.values()]
+      .map((n) => ({ ...n, frontends: n.frontends ?? [], backends: n.backends ?? [] }))
+      .sort(
+        (a, b) => a.group.localeCompare(b.group) || a.node_name.localeCompare(b.node_name),
+      );
 
     const summary: FleetSummary = {
       nodes_total: list.length,

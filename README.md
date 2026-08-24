@@ -15,8 +15,13 @@ result. Two transports ship, selected per node.
 
 | Driver | Source | Read state | Read config | Runtime actions |
 |---|---|---|---|---|
-| `dataplane` | HAProxy Data Plane API | yes | yes | ready / drain / maint |
+| `dataplane` | HAProxy Data Plane API | yes | yes | ready / drain / maint / weight |
 | `stats_csv` | HTTP stats page CSV export | yes | no | no |
+
+"Runtime actions" is table shorthand — weight is technically a configuration
+write, not a Runtime API call. See [Known transport
+differences](#known-transport-differences) for why, and
+[Server weight](#server-weight) for how it is exposed.
 
 `dataplane` is the intended path. `stats_csv` exists so legacy nodes that cannot
 run the Data Plane API still appear in the fleet view — read-only, with action
@@ -38,14 +43,33 @@ under its backend (`/runtime/backends/{backend}/servers/{name}`); v2 takes the
 backend as a query parameter. The driver picks the right shape from the node's
 `api_prefix` — using the wrong one returns a bare 404.
 
-**Weight cannot be changed at runtime.** The Data Plane API's `runtime_server`
-model exposes only `address`, `admin_state`, `operational_state` and `port` —
-there is no weight field in v2 or v3. `PUT .../weight` therefore answers 501
-with an explanation, and the UI shows no weight control. Changing a weight
-needs a configuration transaction and a reload, which arrives with config
-editing (roadmap item 1).
+**Weight has no runtime endpoint, so it goes through configuration instead.**
+The Data Plane API's `runtime_server` model exposes only `address`,
+`admin_state`, `operational_state` and `port` — there is no weight field in
+v2 or v3. `set_server_weight` reads the server's current configuration,
+edits `weight`, and writes the whole object back under the current config
+version; dataplaneapi's own `reload_strategy` applies it, the same as any
+other configuration write. See [Server weight](#server-weight).
 
-All three verified against HAProxy 3.0 and Data Plane API v3.0.23.
+**Split configuration (`-f /path/to/conf.d`).** The Data Plane API's
+`config_file` setting is a single path — there is no equivalent of HAProxy's
+own `-f <directory>` support for merging multiple files. A node started with
+`-f $CONFIG -f $CFGDIR` (RHEL's stock haproxy unit does this by default) runs
+the merged result, but dataplaneapi only reads and writes whichever single
+file `config_file` names. Live state — fleet health, frontend/backend/server
+stats, `ready`/`drain`/`maint` — is unaffected, since it comes from the
+running process regardless of how many files built it. The Config page's
+structured view and the raw editor are not: they show only `config_file`'s
+contents, so a node whose services live in `conf.d/*.cfg` fragments (rather
+than the main file) shows those backends as absent, and the raw editor would
+silently apply only to the main file. If the split is intentional (per-service
+ownership, independent change control) register the node anyway for
+monitoring and runtime actions, but treat its Config page as incomplete and
+do not use the raw editor there. There is no fix on the driver side for
+this — it is a Data Plane API constraint, not a parsing gap.
+
+The first three verified against HAProxy 3.0 and Data Plane API v3.0.23; the
+split-configuration behavior against HAProxy 2.4 on RHEL 8 (`w4-atm-lb`).
 
 ---
 
@@ -158,6 +182,22 @@ disabled with an explanatory label when the server is already in rotation.
 
 Hover colour carries the same meaning as the old button variants: amber for
 drain and pause, red for maint and remove, green for ready and resume.
+
+### Server weight
+
+A server's weight in the table is click-to-edit on any node whose driver
+advertises the `set_weight` capability — currently `dataplane`, since
+`stats_csv` cannot write configuration at all and stays read-only. Click the
+number, type a new one, and Enter or clicking away applies it; Escape cancels
+without sending anything. Out-of-range values (outside 0-256) or leaving it
+unchanged are treated as a cancel rather than a request, so a stray blur does
+not fire a no-op write.
+
+Unlike drain and maint, there is nothing to confirm — a weight change does
+not remove a server from rotation — so it applies immediately and reports
+through the same page notice `ready` uses, not a dialog. Applying is not
+instant: it is a configuration write, and the result reflects on the next
+poll after dataplaneapi's `reload_delay` reloads HAProxy.
 
 ### Bulk operations
 
@@ -678,9 +718,19 @@ it covers breaks the build rather than rotting quietly.
 DASHBOARD_IP=10.0.0.20 ./deploy/haproxy-node/prepare-node.sh
 ```
 
+If `haproxy-dataplaneapi` wasn't in any configured repo, the script fell back to
+installing the upstream `.rpm` release from GitHub directly — that package puts
+its config at `/etc/dataplaneapi/dataplaneapi.yml`, not `/etc/haproxy/`. Confirm
+which path applies to this node before editing anything:
+
+```bash
+cat /etc/default/dataplaneapi   # EnvironmentFile the systemd unit reads
+```
+
 Then merge `deploy/haproxy-node/haproxy-snippet.cfg` into `/etc/haproxy/haproxy.cfg`
-and install `deploy/haproxy-node/dataplaneapi.yml` at `/etc/haproxy/dataplaneapi.yml`,
-adjusting addresses and certificate paths. Validate before reloading:
+and install `deploy/haproxy-node/dataplaneapi.yml` at whichever path `cat`
+above showed, adjusting the host address and, if hardening beyond plain HTTP,
+the TLS block. Validate before reloading:
 
 ```bash
 haproxy -c -f /etc/haproxy/haproxy.cfg && systemctl reload haproxy
@@ -688,6 +738,28 @@ haproxy -c -f /etc/haproxy/haproxy.cfg && systemctl reload haproxy
 
 The snippet is not applied automatically — every fleet's config layout differs,
 and silently rewriting a load balancer's config is not something this tool does.
+
+**Each node needs its own password**, entered in two places that must agree:
+
+```bash
+openssl passwd -6 'YourRealPasswordHere'   # -> $6$...
+```
+
+the resulting hash into that node's `userlist dataplaneapi` block (`password
+$6$...`, not `insecure-password`, which stores it in clear on disk), and the
+plaintext password itself — not the hash — into HAProxyOps when you register
+or edit the node. HAProxyOps stores it Fernet-encrypted per node (see
+[Security model](#security-model)); there is no shared credential across the
+fleet, so a leaked or rotated password on one node never touches the others.
+
+If the node starts HAProxy with more than one `-f` flag (a main file plus a
+`conf.d/` directory of fragments), read "Split configuration" under Known
+transport differences above before registering it — the Data Plane API only
+ever sees the single file `dataplaneapi.yml`'s `config_file` names.
+
+Metrics need no node-side setup beyond what is already here — see
+[Metrics and history](#metrics-and-history) for how HAProxyOps feeds
+Prometheus from any node, regardless of HAProxy version.
 
 ### 2. Install the dashboard server
 
@@ -901,9 +973,31 @@ stored, so the dashboard never waits on a receiver.
 ## Metrics and history
 
 HAProxyOps stores **no time series of its own** — it owns control and current
-state. Trends on the [Metrics page](#metrics-page) come from Prometheus scraping
-the exporter HAProxy 2.0+ serves natively on its stats port (no sidecar, nothing
-to install on the nodes).
+state. Trends on the [Metrics page](#metrics-page) come from Prometheus, fed
+one of two ways:
+
+- **HAProxy 2.0+, built with the exporter compiled in.** Prometheus scrapes
+  the `/metrics` service HAProxy serves natively on its stats port — no
+  sidecar, nothing to install on the node. Not guaranteed by version alone:
+  confirm both before relying on it —
+  ```bash
+  haproxy -v                                   # must be >= 2.0
+  haproxy -vv | grep -A4 "Available services"  # must list prometheus-exporter
+  ```
+  Some distro packages skip it even on 2.0+.
+- **Any other node — older HAProxy, or the service not compiled in.**
+  HAProxyOps has its own built-in exporter (`backend/app/prom_export.py`,
+  served at `GET /api/prometheus/nodes`) that replays the frontend/backend
+  counters it already polls from every registered node over the Data Plane
+  API, in Prometheus exposition format. Point Prometheus at that one
+  endpoint instead of at each node — one scrape target covers the whole
+  fleet, and nothing extra needs installing or exposing on any node. This is
+  what `demo/prometheus/prometheus.yml`'s `haproxyops-nodes` job does; set
+  `honor_labels: true` on it, since each node's series already carries its
+  own `instance` label and Prometheus would otherwise overwrite it with the
+  scrape target's own address. Guard the endpoint with
+  `HAPROXYOPS_METRICS_EXPORT_TOKEN` (sent back as `?token=`) if it needs to
+  be reachable from anywhere less trusted than Prometheus's own network.
 
 Set `HAPROXYOPS_PROMETHEUS_URL` to enable graphs. Without it the metrics
 section renders a one-line explanation instead of breaking the page.
@@ -1029,13 +1123,7 @@ Things already load-bearing that will need work before they bite:
 
 Deliberately out of scope for this version, in the order they make sense:
 
-1. **Runtime weight changes.** The Data Plane API exposes no weight field in
-   either v2 or v3, so the capability is absent rather than broken — see
-   [Known transport differences](#known-transport-differences). Changing a
-   weight means a configuration change, which
-   [config editing](#editing-configuration) can now make, but a runtime-only
-   adjustment still has nowhere to go.
-2. **SSO (OIDC)** instead of local accounts.
+1. **SSO (OIDC)** instead of local accounts.
 
 **Service grouping for the stats-page driver is not achievable**, and the
 earlier claim that a Runtime API socket driver would close it was wrong.

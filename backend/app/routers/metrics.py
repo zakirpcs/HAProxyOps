@@ -1,6 +1,7 @@
 """Prometheus-backed graphs for one node."""
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, Response, status
 
+from .. import prom_export
 from ..config import get_settings
 from ..deps import CurrentUser, SessionDep
 from ..metrics import MetricsUnavailable, query_range
@@ -14,6 +15,20 @@ settings = get_settings()
 async def metrics_status(_: CurrentUser) -> dict:
     """Whether graphs are available at all, so the UI can hide them cleanly."""
     return {"enabled": bool(settings.prometheus_url)}
+
+
+@router.get("/prometheus/nodes")
+async def prometheus_export(token: str | None = None) -> Response:
+    """Exposition text for every node's latest cached snapshot.
+
+    No CurrentUser dependency: Prometheus is a machine scraper with no
+    browser session to check. Guarded instead by an optional shared-secret
+    query param - see metrics_export_token in config.py.
+    """
+    if settings.metrics_export_token and token != settings.metrics_export_token:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid or missing token")
+    body = await prom_export.render()
+    return Response(content=body, media_type="text/plain; version=0.0.4")
 
 
 @router.get("/nodes/{node_id}/metrics")

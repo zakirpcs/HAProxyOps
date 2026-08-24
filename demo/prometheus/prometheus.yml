@@ -19,3 +19,16 @@ scrape_configs:
         labels: {node: lb-internal-1}
       - targets: [haproxy-demo-4:8404]
         labels: {node: lb-internal-2}
+
+  # Real nodes, scraped through HAProxyOps' own built-in exporter
+  # (backend/app/prom_export.py) rather than the node directly - it replays
+  # the snapshot HAProxyOps already polled over the Data Plane API, so
+  # nothing needs to be installed or exposed on the node itself. One target
+  # (the API container) serves every registered node; each node's series
+  # carry their own `instance` label, so honor_labels is required or
+  # Prometheus would overwrite it with this scrape target's address instead.
+  - job_name: haproxyops-nodes
+    honor_labels: true
+    metrics_path: /api/prometheus/nodes
+    static_configs:
+      - targets: [api:8000]

@@ -68,6 +68,7 @@ export default function NodeDetail() {
   }
 
   const canAct = node.capabilities?.includes("set_admin_state");
+  const canSetWeight = node.capabilities?.includes("set_weight");
   const needle = filter.trim().toLowerCase();
   const match = (name: string) => !needle || name.toLowerCase().includes(needle);
 
@@ -173,6 +174,22 @@ export default function NodeDetail() {
     }
   }
 
+  // Unlike admin-state, a weight change is a configuration write, not a
+  // runtime one - see the driver. There is nothing to confirm (it does not
+  // remove a server from rotation), so it applies straight away like ready
+  // does, surfaced as a page notice rather than a dialog.
+  async function changeWeight(backend: string, server: string, weight: number) {
+    try {
+      await api.setWeight(id, backend, server, weight);
+      setNotice({
+        kind: "ok",
+        text: `${backend}/${server} weight set to ${weight} - applied. State refreshes on next poll.`,
+      });
+    } catch (e) {
+      setNotice({ kind: "err", text: e instanceof Error ? e.message : "Weight change failed" });
+    }
+  }
+
   return (
     <div className="space-y-5">
       <Header node={node} connected={connected} />
@@ -211,6 +228,7 @@ export default function NodeDetail() {
                   <BackendRow
                     key={backend.name} backend={backend}
                     canAct={!!canAct} onRequest={setPending} onApply={applyAction} match={match}
+                    canSetWeight={!!canSetWeight} onWeightChange={changeWeight}
                   />
                 ))}
             </div>
@@ -251,6 +269,7 @@ export default function NodeDetail() {
                   <ServiceSection
                     key={service.key} service={service} shared={grouping.shared}
                     canAct={!!canAct} onRequest={setPending} onApply={applyAction} match={match}
+                    canSetWeight={!!canSetWeight} onWeightChange={changeWeight}
                     isPicked={(b, sv) => picked.has(keyOf(b, sv))}
                     onPick={togglePick}
                     onPickAll={pickAll}
@@ -294,6 +313,7 @@ export default function NodeDetail() {
                   <BackendRow
                     key={backend.name} backend={backend}
                     canAct={!!canAct} onRequest={setPending} onApply={applyAction} match={match}
+                    canSetWeight={!!canSetWeight} onWeightChange={changeWeight}
                   />
                 ))}
               </div>
@@ -447,7 +467,7 @@ function Header({ node, connected }: { node: NodeSnapshot; connected: boolean })
  */
 function ServiceSection({
   service, shared, canAct, onRequest, onApply, match, open, onToggle, compact,
-  isPicked, onPick, onPickAll,
+  canSetWeight, onWeightChange, isPicked, onPick, onPickAll,
 }: {
   service: Service; shared: Set<string>; canAct: boolean;
   onRequest: (action: PendingAction) => void;
@@ -455,6 +475,8 @@ function ServiceSection({
   match: (name: string) => boolean;
   open: boolean;
   onToggle: () => void;
+  canSetWeight: boolean;
+  onWeightChange: (backend: string, server: string, weight: number) => Promise<void>;
   isPicked: (backend: string, server: string) => boolean;
   onPick: (backend: string, server: string) => void;
   onPickAll: (backend: string, servers: string[], on: boolean) => void;
@@ -530,6 +552,7 @@ function ServiceSection({
             <BackendRow
               key={backend.name} backend={backend} canAct={canAct}
               onRequest={onRequest} onApply={onApply} match={match}
+              canSetWeight={canSetWeight} onWeightChange={onWeightChange}
               shared={shared.has(backend.name)}
               // On a large node only the backend that is actually broken pays
               // for its server table up front.
@@ -606,12 +629,14 @@ function FrontendTable({ frontends }: { frontends: FrontendStat[] }) {
 
 function BackendRow({
   backend, canAct, onRequest, onApply, match, shared = false, defaultOpen = true,
-  parentMatched = false, isPicked, onPick, onPickAll,
+  parentMatched = false, canSetWeight, onWeightChange, isPicked, onPick, onPickAll,
 }: {
   backend: BackendStat; canAct: boolean;
   onRequest: (action: PendingAction) => void;
   onApply: (action: PendingAction) => void;
   match: (name: string) => boolean;
+  canSetWeight: boolean;
+  onWeightChange: (backend: string, server: string, weight: number) => Promise<void>;
   /** Reachable from more than one frontend, so it appears in several sections. */
   shared?: boolean;
   /** Whether the server table starts open. False on nodes with many services. */
@@ -702,6 +727,7 @@ function BackendRow({
                 <ServerRow
                   key={server.name} server={server}
                   canAct={canAct} onRequest={onRequest} onApply={onApply}
+                  canSetWeight={canSetWeight} onWeightChange={onWeightChange}
                   picked={isPicked?.(server.name)}
                   onPick={onPick ? () => onPick(server.name) : undefined}
                 />
@@ -714,14 +740,41 @@ function BackendRow({
   );
 }
 
-function ServerRow({ server, canAct, onRequest, onApply, picked, onPick }: {
+function ServerRow({
+  server, canAct, onRequest, onApply, canSetWeight, onWeightChange, picked, onPick,
+}: {
   server: ServerStat; canAct: boolean;
   onRequest: (action: PendingAction) => void;
   onApply: (action: PendingAction) => void;
+  canSetWeight: boolean;
+  onWeightChange: (backend: string, server: string, weight: number) => Promise<void>;
   picked?: boolean;
   onPick?: () => void;
 }) {
   const errors = server.connection_errors + server.response_errors;
+  // Editing state lives here, not lifted up: only one row is ever being
+  // edited, and lifting it would re-render every row in the backend on each
+  // keystroke.
+  const [editingWeight, setEditingWeight] = useState<string | null>(null);
+  const [weightBusy, setWeightBusy] = useState(false);
+
+  async function saveWeight() {
+    if (editingWeight === null) return;
+    const value = Number(editingWeight);
+    const unchanged = !Number.isInteger(value) || value < 0 || value > 256
+      || value === (server.weight ?? 0);
+    if (unchanged) {
+      setEditingWeight(null);
+      return;
+    }
+    setWeightBusy(true);
+    try {
+      await onWeightChange(server.backend, server.name, value);
+    } finally {
+      setWeightBusy(false);
+      setEditingWeight(null);
+    }
+  }
 
   function changeState(state: AdminState) {
     // Returning a server to rotation is the restorative direction, so it
@@ -755,7 +808,34 @@ function ServerRow({ server, canAct, onRequest, onApply, picked, onPick }: {
           <span className="ml-1 text-[var(--color-drain)]">({server.check_failures})</span>
         )}
       </td>
-      <td className="text-right">{server.weight ?? "-"}</td>
+      <td className="text-right">
+        {!canSetWeight ? (
+          server.weight ?? "-"
+        ) : editingWeight !== null ? (
+          <input
+            type="number" min={0} max={256} autoFocus
+            value={editingWeight}
+            disabled={weightBusy}
+            aria-label={`Weight for ${server.backend}/${server.name}`}
+            onChange={(e) => setEditingWeight(e.target.value)}
+            onBlur={saveWeight}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") e.currentTarget.blur();
+              if (e.key === "Escape") setEditingWeight(null);
+            }}
+            className="w-14 rounded border border-ink-600 bg-ink-800 px-1 py-0.5 text-right text-xs outline-none focus:border-[var(--color-accent)]"
+          />
+        ) : (
+          <button
+            type="button"
+            onClick={() => setEditingWeight(String(server.weight ?? 0))}
+            title="Click to change weight"
+            className="rounded px-1 hover:bg-ink-700 hover:text-slate-200"
+          >
+            {server.weight ?? "-"}
+          </button>
+        )}
+      </td>
       <td className="text-right">{server.sessions_current.toLocaleString()}</td>
       <td className={`text-right ${server.queue_current ? "text-[var(--color-drain)]" : "text-[var(--color-mute)]"}`}>
         {server.queue_current}

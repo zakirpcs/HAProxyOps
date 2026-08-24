@@ -80,15 +80,16 @@ class DataPlaneDriver:
         self.node = node
         self.prefix = "/" + node.api_prefix.strip("/")
         self._client = build_http_client(node, password, timeout)
-        # SET_WEIGHT is deliberately absent. The Data Plane API's runtime_server
-        # model exposes only address / admin_state / operational_state / port -
-        # there is no weight field in v2 or v3, so a weight change has to go
-        # through a configuration transaction and a reload. Verified against
-        # the v3 /specification on HAProxy 3.0.
+        # SET_WEIGHT edits the server's configuration rather than the runtime
+        # socket - the Runtime API's runtime_server model exposes only
+        # address / admin_state / operational_state / port, with no weight
+        # field in v2 or v3 (verified against the v3 /specification on
+        # HAProxy 3.0). dataplaneapi's own reload_strategy applies it.
         self.capabilities = (
             Capability.READ_STATE,
             Capability.READ_CONFIG,
             Capability.SET_ADMIN_STATE,
+            Capability.SET_WEIGHT,
             Capability.WRITE_CONFIG,
         )
 
@@ -303,12 +304,47 @@ class DataPlaneDriver:
         path, params = self._runtime_server_path(backend, server)
         await self._request("PUT", path, params=params, json={"admin_state": str(state)})
 
+    def _config_server_path(self, backend: str, server: str) -> tuple[str, dict]:
+        """Path and query for one server's configuration. Same v2/v3 split as
+        the runtime path above - v3 nests under the backend, v2 takes it as a
+        query parameter."""
+        if self.prefix == "/v3":
+            return f"/configuration/backends/{backend}/servers/{server}", {}
+        return f"/configuration/servers/{server}", {"backend": backend}
+
     async def set_server_weight(self, backend: str, server: str, weight: int) -> None:
-        raise UnsupportedOperation(
-            "The Data Plane API does not expose server weight at runtime - its "
-            "runtime_server model has no weight field in either v2 or v3. Changing a "
-            "weight requires editing the backend's configuration and reloading."
-        )
+        """Change a server's weight via a configuration write.
+
+        There is no runtime endpoint for this (see the capabilities comment
+        in __init__), so it reads the server's current configuration, edits
+        `weight` in place, and writes the whole object back - the API models
+        a server PUT as a full replace, not a partial patch. dataplaneapi
+        picks up the change on its own reload_delay, the same as any other
+        configuration write.
+        """
+        path, params = self._config_server_path(backend, server)
+        current = _unwrap(await self._request("GET", path, params=params))
+        if not isinstance(current, dict):
+            raise DriverError(f"could not read current configuration for {backend}/{server}")
+        current["weight"] = weight
+
+        version = await self._request("GET", "/configuration/version")
+        url = f"{self.prefix}/services/haproxy{path}"
+        try:
+            response = await self._client.put(
+                url, params={**params, "version": version}, json=current,
+            )
+        except httpx.HTTPError as exc:
+            raise DriverError(f"{type(exc).__name__}: {exc}") from exc
+
+        if response.status_code == 409:
+            raise ConfigConflict(_message_from(response))
+        if response.status_code == 400:
+            raise ConfigRejected(_message_from(response))
+        if response.status_code == 401:
+            raise DriverError("authentication rejected by Data Plane API (401)")
+        if response.status_code >= 400:
+            raise DriverError(f"HTTP {response.status_code}: {response.text[:500]}")
 
 
 # --- response parsing -------------------------------------------------------
@@ -413,6 +449,7 @@ def _frontend_from(name: str, s: dict) -> FrontendStat:
         bytes_out=as_int(pick(s, "bout")),
         request_errors=as_int(pick(s, "ereq")),
         requests_denied=as_int(pick(s, "dreq")),
+        requests_total=as_int(pick(s, "req_tot")),
         rate=as_int(pick(s, "rate", "req_rate")),
     )
 

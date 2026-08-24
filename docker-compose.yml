@@ -44,41 +44,19 @@ services:
       HAPROXYOPS_POLL_INTERVAL_SECONDS: "5"
       HAPROXYOPS_PROMETHEUS_URL: http://prometheus:9090
       HAPROXYOPS_INITIAL_ADMIN_PASSWORD: haproxyops
-    ports: ["8000:8000"]
+    ports: ["8001:8000"]
 
   web:
     build:
       context: ./frontend
       dockerfile: Containerfile
     depends_on: [api]
-    ports: ["8080:8080"]
+    ports: ["6060:8080"]
 
-  # --- demo HAProxy node, so the dashboard has something to show ------------
-
-  # Demo node: HAProxy running the Data Plane API alongside it, so the
-  # dashboard gets full runtime actions against it.
-  haproxy-demo:
-    image: docker.io/haproxytech/haproxy-alpine:3.0
-    volumes:
-      # This node owns its config directory so the editor can write to it.
-      # Applying makes HAProxy rename a temp file over haproxy.cfg, and a
-      # bind-mounted *file* cannot be replaced that way ("device or resource
-      # busy") - a real node has its config on its own filesystem, so mounting
-      # the directory is the truthful setup as well as the working one.
-      #
-      # It starts as a copy of demo/haproxy.cfg, which the other edge node
-      # still mounts read-only. Editing lb-edge-1 changes only this copy, which
-      # is the point: the other nodes stay a fixed reference to compare against.
-      - ./demo/etc-edge1:/usr/local/etc/haproxy
-      - ./demo/dataplaneapi-start.sh:/usr/local/bin/dataplaneapi-start.sh:ro
-    ports:
-      - "8404:8404"   # stats page
-      - "5555:5555"   # Data Plane API
-      - "8081:8081"   # proxied app
-    depends_on: [web1, web2]
-
-  # Demo Prometheus, scraping each node's built-in exporter. Point the API at
-  # your existing Prometheus in production rather than running this one.
+  # Prometheus, scraping each node's built-in exporter. Point HAPROXYOPS_PROMETHEUS_URL
+  # in the api service at your existing Prometheus in production instead of
+  # running this one. Scrape targets live in demo/prometheus/prometheus.yml -
+  # update them to point at your real node(s) once you've registered one.
   prometheus:
     image: docker.io/prom/prometheus:v2.55.1
     command:
@@ -88,36 +66,6 @@ services:
     volumes:
       - ./demo/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
     ports: ["9090:9090"]
-
-  # Extra demo nodes so the fleet table has enough rows to be worth sorting.
-  # Not port-published: the dashboard reaches them by service name.
-  haproxy-demo-2:
-    image: docker.io/haproxytech/haproxy-alpine:3.0
-    volumes:
-      - ./demo/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
-      - ./demo/dataplaneapi-start.sh:/usr/local/bin/dataplaneapi-start.sh:ro
-    depends_on: [web1, web2]
-
-  haproxy-demo-3:
-    image: docker.io/haproxytech/haproxy-alpine:3.0
-    volumes:
-      - ./demo/haproxy-b.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
-      - ./demo/dataplaneapi-start.sh:/usr/local/bin/dataplaneapi-start.sh:ro
-    depends_on: [web1, web2]
-
-  haproxy-demo-4:
-    image: docker.io/haproxytech/haproxy-alpine:3.0
-    volumes:
-      - ./demo/haproxy-b.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
-      - ./demo/dataplaneapi-start.sh:/usr/local/bin/dataplaneapi-start.sh:ro
-    depends_on: [web1, web2]
-
-  web1:
-    image: docker.io/traefik/whoami:latest
-  web2:
-    image: docker.io/traefik/whoami:latest
-  # There is no web3 container: the demo config points that server at a dead
-  # local port so the dashboard has a realistic DOWN backup server to render.
 
 volumes:
   pgdata:

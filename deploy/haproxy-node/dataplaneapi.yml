@@ -1,60 +1,87 @@
-# /etc/haproxy/dataplaneapi.yml
+# Default config path depends on how dataplaneapi got installed:
+#   - upstream .rpm (prepare-node.sh's fallback when haproxy-dataplaneapi
+#     isn't in any configured repo): /etc/dataplaneapi/dataplaneapi.yml
+#   - a distro/repo package: check that package's own file list
+# Whichever applies, confirm the systemd unit's EnvironmentFile actually
+# points `-f` at this file before assuming it's being read:
+#   cat /etc/default/dataplaneapi
 #
-# Install on each managed node:
-#   dnf install haproxy haproxy-dataplaneapi
-#   systemctl enable --now haproxy dataplaneapi
-#
-# If your distro ships dataplaneapi only as a standalone binary, drop it in
-# /usr/local/bin and use the systemd unit alongside this file.
+# Verified against the real installed layout of HAProxy Data Plane API
+# v3.4.2 on RHEL 8/9 - fields below match what that version expects, which
+# differs from older docs still floating around (inline `user:` list,
+# `reload_strategy: custom`).
 
 config_version: 2
 
 name: lb1.dc1.example.com
 
 dataplaneapi:
-  host: 10.0.0.11          # management interface only
+  host: 0.0.0.0
   port: 5555
 
-  # Keep the TLS block below populated. dataplaneapi enables both the http and
-  # https listeners by default; if https is enabled without a certificate it
-  # binds a port and then exits(1) silently, logging nothing at any log level.
-  # Either configure TLS (as here) or pin --scheme=http explicitly.
-  tls:
-    tls_host: 10.0.0.11
-    tls_port: 5556
-    tls_certificate: /etc/haproxy/certs/dataplane.crt
-    tls_private_key: /etc/haproxy/certs/dataplane.key
-    # mTLS: require the dashboard to present a client certificate.
-    # This is the recommended posture - basic auth alone leaves a
-    # config-mutating API reachable to anything that can route to the port.
-    tls_ca_certificate: /etc/haproxy/certs/dashboard-ca.crt
+  # Plain HTTP, restricted to the dashboard host only by the firewall rule
+  # prepare-node.sh adds. dataplaneapi enables both http and https listeners
+  # by default; an https listener left enabled with no certificate binds the
+  # port and then exits(1) silently, logging nothing at any level - that is
+  # why `scheme` is pinned explicitly here rather than left to default.
+  # For TLS/mTLS instead (recommended once you're past initial setup - see
+  # the commented block below), delete this key.
+  scheme:
+    - http
 
-  user:
-    # Generate the hash with:  mkpasswd -m sha-512   (or openssl passwd -6)
-    - name: haproxyops
-      insecure: false
-      password: "$6$REPLACE_WITH_A_REAL_HASH"
+  # tls:
+  #   tls_host: 10.0.0.11
+  #   tls_port: 5556
+  #   tls_certificate: /etc/haproxy/certs/dataplane.crt
+  #   tls_private_key: /etc/haproxy/certs/dataplane.key
+  #   # mTLS: require the dashboard to present a client certificate. This is
+  #   # the recommended posture for production - basic auth over plain HTTP
+  #   # leaves a config-mutating API reachable to anything that can route to
+  #   # the port, even inside a firewalled subnet.
+  #   tls_ca_certificate: /etc/haproxy/certs/dashboard-ca.crt
+
+  # Credentials come from a HAProxy userlist, not an inline password field -
+  # add this block to haproxy.cfg (see haproxy-snippet.cfg) with a real
+  # password in place of CHANGE-ME:
+  #   userlist dataplaneapi
+  #       user haproxyops insecure-password CHANGE-ME
+  userlist:
+    userlist: dataplaneapi
+    userlist_file: ""
 
   transaction:
-    transaction_dir: /var/lib/haproxy/dataplane-transactions
+    transaction_dir: /var/lib/dataplaneapi/transactions
+    backups_dir: /var/lib/dataplaneapi/backups
 
   resources:
     maps_dir: /etc/haproxy/maps
     ssl_certs_dir: /etc/haproxy/ssl
+    general_storage_dir: /etc/haproxy/general
     spoe_dir: /etc/haproxy/spoe
 
 haproxy:
+  # A single file only - the Data Plane API has no equivalent of HAProxy's
+  # own `-f <directory>` support for merging multiple config files. If this
+  # node is started with `-f $CONFIG -f $CFGDIR` (RHEL's stock haproxy unit
+  # does this by default) and services live in the CFGDIR fragments rather
+  # than this file, the Config page and raw editor will not see them - see
+  # "Split configuration" under Known transport differences in the main
+  # README before registering a node like that.
   config_file: /etc/haproxy/haproxy.cfg
   haproxy_bin: /usr/sbin/haproxy
 
+  # `systemd` delegates reload/restart to the unit itself - no reload_cmd/
+  # restart_cmd needed, unlike the `custom` strategy. Requires the haproxy
+  # service to actually be named "haproxy".
   reload:
     reload_delay: 5
-    reload_cmd: systemctl reload haproxy
-    restart_cmd: systemctl restart haproxy
-    status_cmd: systemctl status haproxy
-    reload_strategy: custom
+    service_name: haproxy
+    reload_strategy: systemd
 
 log_targets:
-  - log_to: syslog
-    syslog_facility: local0
+  - log_to: file
+    log_file: /var/log/dataplaneapi.log
     log_level: info
+    log_types:
+      - access
+      - app

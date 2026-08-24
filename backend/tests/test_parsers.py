@@ -136,25 +136,12 @@ def test_v2_passes_backend_as_query_param():
     assert params == {"backend": "app-back"}
 
 
-def test_weight_is_not_a_runtime_capability():
-    """runtime_server has no weight field in v2 or v3, so never advertise it."""
+def test_weight_is_advertised_alongside_admin_state():
+    """runtime_server has no weight field in v2 or v3, but the driver makes up
+    for it with a configuration write - see test_weight.py for that path."""
     from app.drivers.base import Capability
 
     for prefix in ("/v2", "/v3"):
         caps = _driver(prefix).capabilities
-        assert Capability.SET_WEIGHT not in caps
+        assert Capability.SET_WEIGHT in caps
         assert Capability.SET_ADMIN_STATE in caps
-
-
-def test_set_weight_raises_unsupported():
-    import asyncio
-
-    from app.drivers.base import UnsupportedOperation
-
-    driver = _driver("/v3")
-    try:
-        asyncio.run(driver.set_server_weight("app-back", "web1", 50))
-    except UnsupportedOperation as exc:
-        assert "weight" in str(exc).lower()
-    else:
-        raise AssertionError("expected UnsupportedOperation")

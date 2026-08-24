@@ -85,6 +85,7 @@ class FrontendStat:
     bytes_out: int = 0
     request_errors: int = 0
     requests_denied: int = 0
+    requests_total: int = 0
     rate: int = 0
     #: Where this frontend sends traffic. Runtime stats carry no routing, so
     #: these come from the configuration and stay empty on transports that

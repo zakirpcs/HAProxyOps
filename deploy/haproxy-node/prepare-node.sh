@@ -6,20 +6,63 @@
 # every fleet's config layout differs.
 set -euo pipefail
 
-DASHBOARD_IP="${DASHBOARD_IP:?set DASHBOARD_IP to the dashboard server's address}"
+DASHBOARD_IP="${DASHBOARD_IP:?set DASHBOARD_IP to the dashboard servers address}"
 DPAPI_PORT="${DPAPI_PORT:-5555}"
 STATS_PORT="${STATS_PORT:-8404}"
+#: Upstream release to fall back to when haproxy-dataplaneapi is not in any
+#: configured repo. Bump by overriding the env var, not by editing this file.
+DPAPI_VERSION="${DPAPI_VERSION:-3.4.2}"
 
-echo "==> Installing HAProxy and the Data Plane API"
-dnf install -y haproxy haproxy-dataplaneapi || {
-  echo "haproxy-dataplaneapi not in the configured repos."
-  echo "Enable the HAProxy Enterprise/HAProxyTech repo, or install the upstream"
-  echo "dataplaneapi binary into /usr/local/bin and re-run."
-  exit 1
+# Fetch the upstream .rpm release directly from GitHub and install it with
+# dnf, rather than the raw binary tarball: the .rpm ships its own systemd
+# unit (EnvironmentFile=/etc/default/dataplaneapi, ExecStart=/usr/sbin/
+# dataplaneapi $SYSD_OPTIONS) and default config at
+# /etc/dataplaneapi/dataplaneapi.yml - not /etc/haproxy/dataplaneapi.yml.
+# Verified against the real package layout on HAProxy Data Plane API v3.4.2.
+install_dataplaneapi_from_github() {
+  local arch dpapi_arch tmp
+  arch="$(uname -m)"
+  case "$arch" in
+    x86_64) dpapi_arch=linux_x86_64 ;;
+    aarch64) dpapi_arch=linux_arm64 ;;
+    *)
+      echo "No upstream dataplaneapi release for architecture '${arch}'."
+      echo "See https://github.com/haproxytech/dataplaneapi/releases/tag/v${DPAPI_VERSION}"
+      echo "for the full asset list and install manually."
+      exit 1
+      ;;
+  esac
+
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+
+  local url="https://github.com/haproxytech/dataplaneapi/releases/download/v${DPAPI_VERSION}/dataplaneapi_${DPAPI_VERSION}_${dpapi_arch}.rpm"
+  echo "    downloading ${url}"
+  curl -fsSL -o "${tmp}/dataplaneapi.rpm" "${url}"
+  dnf install -y "${tmp}/dataplaneapi.rpm"
+
+  echo "    installed. Config lives at /etc/dataplaneapi/dataplaneapi.yml -"
+  echo "    confirm with: cat /etc/default/dataplaneapi"
 }
 
-echo "==> Creating transaction directory"
-install -d -o haproxy -g haproxy -m 0750 /var/lib/haproxy/dataplane-transactions
+echo "==> Installing HAProxy"
+dnf install -y haproxy
+
+echo "==> Installing the Data Plane API"
+if dnf install -y haproxy-dataplaneapi 2>/dev/null; then
+  echo "Installed haproxy-dataplaneapi from the configured repos."
+else
+  echo "haproxy-dataplaneapi not in the configured repos."
+  echo "Falling back to the upstream .rpm release from GitHub (v${DPAPI_VERSION})."
+  install_dataplaneapi_from_github
+fi
+
+echo "==> Creating transaction and backup directories"
+# Paths match the dataplaneapi.yml default (transaction:/resources:). The
+# package's own postinstall/first-run creates "transactions" but not
+# "backups" - create both explicitly rather than relying on that.
+# dataplaneapi's unit has no User= (runs as root), so root ownership is fine.
+install -d -m 0750 /var/lib/dataplaneapi/transactions /var/lib/dataplaneapi/backups
 
 echo "==> Opening the firewall to the dashboard only"
 firewall-cmd --permanent --add-rich-rule \
@@ -46,6 +89,8 @@ systemctl enable --now haproxy
 systemctl enable --now dataplaneapi
 
 echo
-echo "Done. Register this node in HAProxyOps with:"
-echo "  base_url = https://$(hostname -f):${DPAPI_PORT}"
+echo "Done. Merge haproxy-snippet.cfg (with a real userlist password) and"
+echo "dataplaneapi.yml (see README for the config path) before starting"
+echo "dataplaneapi, then register this node in HAProxyOps with:"
+echo "  base_url = http://$(hostname -f):${DPAPI_PORT}   (or https:// if you added TLS)"
 echo "  driver   = dataplane"

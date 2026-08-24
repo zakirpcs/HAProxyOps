@@ -39,6 +39,12 @@ class Settings(BaseSettings):
     # Prometheus (optional). Without it, the node detail page hides its graphs.
     prometheus_url: str = ""
     prometheus_timeout_seconds: float = 10.0
+    # Shared secret Prometheus must send as ?token= to /api/prometheus/nodes.
+    # That endpoint has no browser session to check, since Prometheus is a
+    # machine scraper - empty means unauthenticated, fine only if the
+    # endpoint is reachable exclusively from a trusted network (e.g. the
+    # docker-compose network) rather than the public internet.
+    metrics_export_token: str = ""
 
     # Alerting. Without a webhook URL the whole subsystem is inert - no state
     # is kept and no evaluation runs, so it costs nothing until configured.
